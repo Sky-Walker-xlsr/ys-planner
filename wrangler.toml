@@ -1,5 +1,5 @@
 name = "ys-planner"
-account_id = "b7cc1bc9eeaec1c7dd4e9308c4c7cfc5" # yannicksalm.ch (Zone für Email Routing)
+account_id = "f59ba441082028e40ca5fd088b154e5d" # Yannick Dev (Zone salm.li)
 main = "worker.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
@@ -24,13 +24,12 @@ remote = true
 [triggers]
 crons = ["0 5 * * *", "0 6 * * *"]
 
-# Eigene Domain (anpassen):
-# [[routes]]
-# pattern = "planner.yannicksalm.ch"
-# custom_domain = true
+[[routes]]
+pattern = "planner.salm.li"
+custom_domain = true
 
 [vars]
-APP_URL = "https://ys-planner.<dein-subdomain>.workers.dev"
+APP_URL = "https://planner.salm.li"
 NEXT_PUBLIC_SUPABASE_URL = "https://sqeundlhrhlepfssroad.supabase.co"
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_mXtHzeKjuc5TPGlQp_jr0w_lsTV_142"
 ZITADEL_ISSUER = "https://auth.yannicksalm.ch"
