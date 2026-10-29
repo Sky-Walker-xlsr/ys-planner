@@ -10,6 +10,8 @@ import { toast } from '@/components/ui/toast'
 import { shortName } from '@/components/ui/avatar'
 import { formatDateTime } from '@/lib/dates'
 import { kbFileUrl, request } from '@/lib/file-urls'
+import { KbSearch } from './kb-search'
+import { FindBar } from './find-bar'
 import type { KbFile } from '@/lib/types'
 
 const MAX_BYTES = 2 * 1024 * 1024
@@ -44,6 +46,8 @@ export function KnowledgeBase({
   const [dragOver, setDragOver] = useState(false)
   const [renaming, setRenaming] = useState<KbFile | null>(null)
   const [deleting, setDeleting] = useState<KbFile | null>(null)
+  // Aus der Suche geöffnet: Suchleiste im Dokument mit dem Suchbegriff öffnen
+  const [find, setFind] = useState<{ fileId: string; query: string; nonce: number } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const uniqueName = useCallback(
@@ -142,6 +146,7 @@ export function KnowledgeBase({
             </button>
           </>
         )}
+        <KbSearch files={files} onOpen={(id, query) => { setFind({ fileId: id, query, nonce: Date.now() }); onSelectFile(id) }} />
         <ul className="flex flex-1 flex-col gap-0.5 overflow-y-auto" aria-label="Dateien">
           {files.length === 0 && <li className="px-2 py-1 text-sm text-text-2">Noch keine Dateien.</li>}
           {files.map((f) => (
@@ -182,7 +187,7 @@ export function KnowledgeBase({
 
       <div className="flex min-w-0 flex-1 flex-col">
         {selected ? (
-          <Editor key={selected.id} file={selected} onOpenTask={onOpenTask} />
+          <Editor key={selected.id} file={selected} onOpenTask={onOpenTask} find={find?.fileId === selected.id ? find : null} />
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-text-2">Wähle eine Datei oder lege eine neue Seite an.</div>
         )}
@@ -225,7 +230,7 @@ function RenameDialog({ file, onClose, onSave }: { file: KbFile; onClose: () => 
 
 type SaveState = 'loading' | 'saved' | 'dirty' | 'saving' | 'error'
 
-function Editor({ file, onOpenTask }: { file: KbFile; onOpenTask: (id: string) => void }) {
+function Editor({ file, onOpenTask, find }: { file: KbFile; onOpenTask: (id: string) => void; find: { query: string; nonce: number } | null }) {
   const { canEdit, state, setPresence, presence, broadcast, onBroadcast, viewer } = usePlanner()
   const [mode, setMode] = useState<Mode>(canEdit ? 'split' : 'preview')
   const [content, setContent] = useState('')
@@ -233,6 +238,31 @@ function Editor({ file, onOpenTask }: { file: KbFile; onOpenTask: (id: string) =
   const dirty = useRef(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latest = useRef('')
+  const previewRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [findState, setFindState] = useState({ open: false, query: '' })
+
+  // Aus der KB-Suche: mit Suchbegriff öffnen
+  const findNonce = find?.nonce
+  const findQuery = find?.query ?? ''
+  useEffect(() => {
+    if (findNonce) setFindState({ open: true, query: findQuery })
+  }, [findNonce, findQuery])
+
+  // Ctrl/Cmd+F: Suchleiste statt Browser-Suche (markierter Text wird übernommen)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        const ta = textareaRef.current
+        const fromTextarea = ta && document.activeElement === ta ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : ''
+        const selected = (fromTextarea || window.getSelection()?.toString() || '').trim()
+        setFindState((f) => ({ open: true, query: selected && selected.length < 100 && !selected.includes('\n') ? selected : f.query }))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const load = useCallback(async () => {
     // Fehlt das Objekt noch (z. B. Seed-Daten), liefert die Route einen leeren Inhalt
@@ -334,9 +364,19 @@ function Editor({ file, onOpenTask }: { file: KbFile; onOpenTask: (id: string) =
         <button type="button" className="btn-secondary" onClick={download}><Download size={14} /> Download</button>
       </div>
 
+      <FindBar
+        open={findState.open}
+        initialQuery={findState.query}
+        onClose={() => setFindState((f) => ({ ...f, open: false }))}
+        previewRef={previewRef}
+        textareaRef={textareaRef}
+        content={content}
+      />
+
       <div className={`grid min-h-0 flex-1 ${mode === 'split' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
         {mode !== 'preview' && canEdit && (
           <textarea
+            ref={textareaRef}
             aria-label="Markdown-Quelltext"
             spellCheck={false}
             className="min-h-[360px] w-full resize-none border-line bg-bg p-4 font-mono text-[13px] leading-relaxed text-text outline-none md:border-r"
@@ -345,7 +385,7 @@ function Editor({ file, onOpenTask }: { file: KbFile; onOpenTask: (id: string) =
           />
         )}
         {(mode !== 'edit' || !canEdit) && (
-          <div className="md-preview min-h-[360px] overflow-y-auto bg-surface p-5">
+          <div ref={previewRef} className="md-preview min-h-[360px] overflow-y-auto bg-surface p-5">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           </div>
         )}

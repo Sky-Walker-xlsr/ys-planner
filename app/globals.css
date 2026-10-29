@@ -145,3 +145,7 @@ textarea.input { height: auto; padding-block: 0.5rem; }
 .md-preview th, .md-preview td { border: 1px solid var(--line); padding: 0.35em 0.6em; }
 .md-preview hr { border-color: var(--line); }
 .md-preview input[type='checkbox'] { margin-right: 0.4em; }
+
+/* Suchen im Dokument (Ctrl+F, CSS Custom Highlight API) */
+::highlight(kb-find) { background-color: #fef08a; color: #1b1d21; }
+::highlight(kb-find-current) { background-color: #f59e0b; color: #1b1d21; }

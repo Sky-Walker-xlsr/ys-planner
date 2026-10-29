@@ -12,8 +12,10 @@ import { toast } from '@/components/ui/toast'
 import { LABEL_COLORS, LABEL_COLOR_NAMES, labelStyle } from '@/lib/design'
 import { dueChipClass, dueTextClass, formatDateTime, relativeTime } from '@/lib/dates'
 import { formatBytes } from '@/lib/image'
-import { PRIORITY_LABEL, STATUS_LABEL, type SectionItem, type TaskFile, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
+import { PRIORITY_LABEL, STATUS_LABEL, type KbFile, type SectionItem, type TaskFile, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
 import { taskFileUrl } from '@/lib/file-urls'
+import { highlight, normalize, searchTerms } from '@/lib/search'
+import { Marked } from './kb-search'
 import { useActions } from './use-actions'
 
 export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onClose: () => void; onOpenFile: (id: string) => void }) {
@@ -593,17 +595,7 @@ function Attachments({ taskId, onOpenFile, withKnowledgeBase }: { taskId: string
             available.length === 0 ? (
               <p className="p-2 text-sm text-text-2">Keine weiteren Dateien in der Knowledge Base.</p>
             ) : (
-              <ul className="max-h-64 overflow-y-auto">
-                {available.map((f) => (
-                  <li key={f.id}>
-                    <button type="button" className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg cursor-pointer"
-                      onClick={() => { close(); void actions.attach(taskId, f.id) }}>
-                      <FileText size={15} className="shrink-0 text-text-2" />
-                      <span className="truncate">{f.name}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <KbPicker files={available} onPick={(id) => { close(); void actions.attach(taskId, id) }} />
             )
           }
         </Popover>}
@@ -611,6 +603,38 @@ function Attachments({ taskId, onOpenFile, withKnowledgeBase }: { taskId: string
         </div>
       )}
     </section>
+  )
+}
+
+/** Auswahl einer KB-Datei mit Suche nach Namen */
+function KbPicker({ files, onPick }: { files: KbFile[]; onPick: (id: string) => void }) {
+  const [q, setQ] = useState('')
+  const terms = searchTerms(q)
+  const shown = terms.length ? files.filter((f) => terms.every((t) => normalize(f.name).includes(t))) : files
+  return (
+    <div>
+      <input
+        className="input mb-1 h-7"
+        placeholder="Datei suchen …"
+        aria-label="Knowledge-Base-Datei suchen"
+        autoFocus
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && shown[0]) { e.preventDefault(); onPick(shown[0].id) } }}
+      />
+      <ul className="max-h-64 overflow-y-auto">
+        {shown.map((f) => (
+          <li key={f.id}>
+            <button type="button" className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-bg cursor-pointer"
+              onClick={() => onPick(f.id)}>
+              <FileText size={15} className="shrink-0 text-text-2" />
+              <span className="truncate"><Marked segments={highlight(f.name, terms)} /></span>
+            </button>
+          </li>
+        ))}
+        {!shown.length && <li className="px-2 py-1.5 text-sm text-text-2">Keine Treffer</li>}
+      </ul>
+    </div>
   )
 }
 
