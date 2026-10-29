@@ -8,7 +8,17 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'], weight: ['400', '500', '600', '700'], variable: '--font-inter' })
 const mono = JetBrains_Mono({ subsets: ['latin'], weight: ['400', '500'], variable: '--font-jetbrains' })
 
-export const metadata: Metadata = { title: 'ys-planner' }
+export function generateMetadata(): Metadata {
+  return {
+    metadataBase: new URL(process.env.APP_URL || 'http://localhost:3040'),
+    title: { default: 'ys-planner', template: '%s · ys-planner' },
+    openGraph: {
+      title: 'ys-planner',
+      siteName: 'ys-planner',
+      images: [{ url: '/brand/og-image.png', width: 1200, height: 630, alt: 'ys-planner' }],
+    },
+  }
+}
 
 async function loadTheme(): Promise<'light' | 'dark'> {
   const session = await getUserSession()

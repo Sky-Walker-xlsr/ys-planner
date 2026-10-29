@@ -1,6 +1,6 @@
 'use client'
+import { Logo } from '@/components/brand/Logo'
 import { useEffect, useRef } from 'react'
-import { LayoutGrid } from 'lucide-react'
 
 export function GuestEntry({
   token,
@@ -24,10 +24,7 @@ export function GuestEntry({
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
       <form ref={form} method="post" action="/api/share/enter" className="card w-full max-w-sm p-6">
-        <div className="mb-4 flex items-center gap-2">
-          <span className="inline-flex size-7 items-center justify-center rounded-md bg-accent text-on-accent"><LayoutGrid size={16} /></span>
-          <span className="font-semibold">ys-planner</span>
-        </div>
+        <Logo size={64} className="mb-4" />
         <h1 className="text-base font-semibold">Gastzugang</h1>
         <p className="mb-4 text-sm text-text-2">{needsInput ? 'Für diesen geteilten Planner sind folgende Angaben nötig.' : 'Planner wird geöffnet …'}</p>
         <input type="hidden" name="token" value={token} />

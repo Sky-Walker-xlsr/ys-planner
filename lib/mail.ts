@@ -39,7 +39,10 @@ export function renderMail(c: MailContent): string {
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 16px">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#FFFFFF;border:1px solid #E3E5E8;border-radius:14px">
       <tr><td style="padding:24px 28px">
-        <div style="font-weight:700;color:#1F7A57;margin-bottom:16px">ys-planner</div>
+        <table role="presentation" cellspacing="0" cellpadding="0" style="margin-bottom:16px"><tr>
+          <td style="padding-right:10px;vertical-align:middle"><img src="${escapeHtml(serverEnv.appUrl)}/brand/icon-192.png" width="28" height="28" alt="" style="display:block;border:0;border-radius:6px"></td>
+          <td style="vertical-align:middle;font-weight:700;color:#1F7A57">ys-planner</td>
+        </tr></table>
         <h1 style="font-size:18px;margin:0 0 12px">${escapeHtml(c.heading)}</h1>
         ${c.paragraphs.map((p) => `<p style="margin:0 0 8px">${escapeHtml(p)}</p>`).join('')}
         ${items}

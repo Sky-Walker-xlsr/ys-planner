@@ -1,5 +1,6 @@
 'use client'
 import { useEffect } from 'react'
+import { Logo } from '@/components/brand/Logo'
 
 export function LoginRedirect() {
   useEffect(() => {
@@ -7,7 +8,8 @@ export function LoginRedirect() {
     window.location.replace(`/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`)
   }, [])
   return (
-    <div className="flex h-screen items-center justify-center text-sm text-text-2">
+    <div className="flex h-screen flex-col items-center justify-center gap-4 text-sm text-text-2">
+      <Logo size={64} />
       Weiterleitung zur Anmeldung …
     </div>
   )

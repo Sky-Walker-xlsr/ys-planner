@@ -6,7 +6,7 @@ import {
   DndContext, PointerSensor, KeyboardSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent,
 } from '@dnd-kit/core'
 import {
-  CheckSquare, ChevronDown, ChevronRight, Folder as FolderIcon, Inbox, LayoutGrid, MoreHorizontal, Plus, Search, Settings, Star,
+  CheckSquare, ChevronDown, ChevronRight, Folder as FolderIcon, Inbox, MoreHorizontal, Plus, Search, Settings, Star,
 } from 'lucide-react'
 import { useCurrentUser } from '@/components/app/current-user'
 import { Avatar, PlannerIcon } from '@/components/ui/avatar'
@@ -17,6 +17,7 @@ import { FolderShareDialog } from '@/components/share/folder-share-dialog'
 import { PLANNER_COLORS } from '@/lib/design'
 import { getBrowserClient } from '@/lib/supabase/browser'
 import type { Folder, Planner } from '@/lib/types'
+import { Wordmark } from '@/components/brand/Wordmark'
 import { useSidebarData } from './use-sidebar-data'
 
 const NO_FOLDER = '__none__'
@@ -91,11 +92,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <aside className="flex h-full w-[264px] shrink-0 flex-col border-r border-line bg-sidebar">
-      <div className="flex items-center gap-2 px-4 pb-3 pt-4">
-        <span className="inline-flex size-7 items-center justify-center rounded-md bg-accent text-on-accent">
-          <LayoutGrid size={16} />
-        </span>
-        <span className="text-[15px] font-semibold">ys-planner</span>
+      <div className="flex items-center px-4 pb-3 pt-4">
+        <Wordmark />
       </div>
 
       <div className="flex flex-col gap-2 px-3">

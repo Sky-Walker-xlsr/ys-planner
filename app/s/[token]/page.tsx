@@ -2,8 +2,9 @@ import { findLinkByToken } from '@/lib/share'
 import { getGuestSession } from '@/lib/auth/session'
 import { GuestEntry } from '@/components/guest/guest-entry'
 import { GuestPlanner } from '@/components/guest/guest-planner'
+import { Logo } from '@/components/brand/Logo'
 
-export const metadata = { title: 'Gastzugang · ys-planner' }
+export const metadata = { title: 'Gastzugang' }
 
 const REASONS = {
   not_found: 'Dieser Link ist ungültig.',
@@ -26,6 +27,7 @@ export default async function SharePage({
     return (
       <main className="flex min-h-screen items-center justify-center p-6">
         <div className="card max-w-sm p-6 text-center">
+          <Logo size={64} className="mx-auto mb-4" />
           <h1 className="text-base font-semibold">Kein Zugriff</h1>
           <p className="mt-1 text-sm text-text-2">{REASONS[check.reason]}</p>
         </div>
