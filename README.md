@@ -99,6 +99,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 | `…0006_r2_paths.sql` | Trigger setzen R2-Schlüssel (`kb/…`, `tasks/…`); Mail-Anhänge bis 25 MB |
 | `…0007_drop_supabase_storage.sql` | Erst **nach** der Storage-Migration: strenge Pfad-Checks, Supabase-Storage-Policies entfernen |
 | `…0008_mail_inbox.sql` | Eingang (`tasks.planner_id`/`bucket_id` nullable, `owner_id`, `mail_sender`), `user_tags`, `user_sender_emails`, `planners.mail_tag`, `user_settings.inbox_local`, Verschiebe-Trigger (Tags → Labels) |
+| `…0009_my_tasks_sort.sql` | `user_settings.my_tasks_sort` / `my_tasks_grouped` (Sortierung von «Meine Aufgaben») |
 
 ### RLS-Tests
 

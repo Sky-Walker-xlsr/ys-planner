@@ -5,11 +5,12 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Calendar } from 'lucide-react'
 import { useCurrentUser } from '@/components/app/current-user'
 import { PlannerIcon } from '@/components/ui/avatar'
-import { PriorityBadge, Segmented } from '@/components/ui/controls'
+import { PriorityBadge, Segmented, Switch } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
 import { MySchedule } from './my-schedule'
 import { getBrowserClient } from '@/lib/supabase/browser'
-import { dueBucket, dueTextClass, formatShort } from '@/lib/dates'
+import { DUE_BUCKET_LABEL, dueBucket, dueTextClass, formatShort, type DueBucket } from '@/lib/dates'
+import { compareMyTasks, MY_TASKS_SORT_LABEL, type MyTasksSort } from '@/lib/my-tasks-sort'
 import { STATUS_LABEL, type TaskPriority, type TaskStatus } from '@/lib/types'
 
 export type MyTaskRow = {
@@ -22,12 +23,7 @@ export type MyTaskRow = {
   planners: { name: string; color: string } | null
 }
 
-const GROUPS = [
-  { key: 'overdue', title: 'Überfällig' },
-  { key: 'today', title: 'Heute' },
-  { key: 'week', title: 'Diese Woche' },
-  { key: 'later', title: 'Später' },
-] as const
+const GROUPS: DueBucket[] = ['overdue', 'today', 'week', 'later', 'none']
 
 type Row = MyTaskRow
 type View = 'list' | 'schedule'
@@ -39,6 +35,8 @@ export function MyTasks() {
   const pathname = usePathname()
   const view: View = useSearchParams().get('view') === 'schedule' ? 'schedule' : 'list'
   const [rows, setRows] = useState<Row[] | null>(null)
+  const [sort, setSort] = useState<MyTasksSort>('due')
+  const [grouped, setGrouped] = useState(true)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async () => {
@@ -49,6 +47,27 @@ export function MyTasks() {
       .neq('tasks.status', 'done')
     setRows(((data ?? []) as unknown as { tasks: Row }[]).map((r) => r.tasks))
   }, [db, me.id])
+
+  // Gespeicherte Sortierung/Gruppierung
+  useEffect(() => {
+    void db
+      .from('user_settings')
+      .select('my_tasks_sort, my_tasks_grouped')
+      .eq('user_id', me.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!data) return
+        if (data.my_tasks_sort in MY_TASKS_SORT_LABEL) setSort(data.my_tasks_sort as MyTasksSort)
+        setGrouped(data.my_tasks_grouped !== false)
+      })
+  }, [db, me.id])
+
+  async function saveDisplay(patch: { my_tasks_sort?: MyTasksSort; my_tasks_grouped?: boolean }) {
+    if (patch.my_tasks_sort) setSort(patch.my_tasks_sort)
+    if (patch.my_tasks_grouped !== undefined) setGrouped(patch.my_tasks_grouped)
+    const { error } = await db.from('user_settings').upsert({ user_id: me.id, ...patch })
+    if (error) toast('Ansicht konnte nicht gespeichert werden')
+  }
 
   useEffect(() => {
     void load()
@@ -65,17 +84,13 @@ export function MyTasks() {
     }
   }, [db, load])
 
+  const sorted = useMemo(() => [...(rows ?? [])].sort(compareMyTasks(sort)), [rows, sort])
+  // Gruppiert: innerhalb der Gruppen gilt die gewählte Sortierung
   const groups = useMemo(() => {
-    const by: Record<string, Row[]> = { overdue: [], today: [], week: [], later: [] }
-    for (const r of rows ?? []) {
-      const b = dueBucket(r.due_date)
-      by[b === 'none' ? 'later' : b].push(r)
-    }
-    for (const list of Object.values(by)) {
-      list.sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999') || a.title.localeCompare(b.title))
-    }
+    const by: Record<DueBucket, Row[]> = { overdue: [], today: [], week: [], later: [], none: [] }
+    for (const r of sorted) by[dueBucket(r.due_date)].push(r)
     return by
-  }, [rows])
+  }, [sorted])
 
   function setView(next: View) {
     router.replace(next === 'schedule' ? `${pathname}?view=schedule` : pathname, { scroll: false })
@@ -108,41 +123,60 @@ export function MyTasks() {
       {view === 'schedule' && rows === null && <p className="p-5 text-sm text-text-2">Lädt …</p>}
       {view === 'list' && (
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 p-5">
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-text-2">Sortieren nach</span>
+            <select className="input h-8 w-auto" value={sort} onChange={(e) => void saveDisplay({ my_tasks_sort: e.target.value as MyTasksSort })}>
+              {(Object.keys(MY_TASKS_SORT_LABEL) as MyTasksSort[]).map((k) => <option key={k} value={k}>{MY_TASKS_SORT_LABEL[k]}</option>)}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={grouped} onChange={(v) => void saveDisplay({ my_tasks_grouped: v })} label="Gruppieren nach Fälligkeit" />
+            <span>Gruppieren nach Fälligkeit</span>
+          </label>
+        </div>
         {rows === null && <p className="text-sm text-text-2">Lädt …</p>}
         {rows?.length === 0 && <p className="text-sm text-text-2">Dir sind keine offenen Aufgaben zugewiesen.</p>}
-        {rows !== null &&
+        {rows !== null && rows.length > 0 && !grouped && <TaskList rows={sorted} />}
+        {rows !== null && grouped &&
           GROUPS.map((g) =>
-            groups[g.key].length ? (
-              <section key={g.key} aria-label={g.title}>
-                <h2 className={`mb-2 text-sm font-semibold ${g.key === 'overdue' ? 'text-danger' : ''}`}>
-                  {g.title} <span className="font-normal text-text-2">· {groups[g.key].length}</span>
+            groups[g].length ? (
+              <section key={g} aria-label={DUE_BUCKET_LABEL[g]}>
+                <h2 className={`mb-2 text-sm font-semibold ${g === 'overdue' ? 'text-danger' : ''}`}>
+                  {DUE_BUCKET_LABEL[g]} <span className="font-normal text-text-2">· {groups[g].length}</span>
                 </h2>
-                <ul className="card divide-y divide-line">
-                  {groups[g.key].map((r) => (
-                    <li key={r.id}>
-                      <Link href={`/p/${r.planner_id}?task=${r.id}`} className="flex flex-wrap items-center gap-3 px-4 py-2.5 hover:bg-bg">
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium">{r.title}</span>
-                          <span className="mt-0.5 flex items-center gap-1.5 text-xs text-text-2">
-                            {r.planners && <PlannerIcon name={r.planners.name} color={r.planners.color} size={14} />}
-                            {r.planners?.name} · {STATUS_LABEL[r.status]}
-                          </span>
-                        </span>
-                        <PriorityBadge priority={r.priority} />
-                        {r.due_date && (
-                          <span className={`inline-flex w-20 items-center gap-1 text-xs ${dueTextClass(r.due_date)}`}>
-                            <Calendar size={13} /> {formatShort(r.due_date)}
-                          </span>
-                        )}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+                <TaskList rows={groups[g]} />
               </section>
             ) : null,
           )}
       </div>
       )}
     </div>
+  )
+}
+
+function TaskList({ rows }: { rows: Row[] }) {
+  return (
+    <ul className="card divide-y divide-line">
+      {rows.map((r) => (
+        <li key={r.id}>
+          <Link href={`/p/${r.planner_id}?task=${r.id}`} className="flex flex-wrap items-center gap-3 px-4 py-2.5 hover:bg-bg">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">{r.title}</span>
+              <span className="mt-0.5 flex items-center gap-1.5 text-xs text-text-2">
+                {r.planners && <PlannerIcon name={r.planners.name} color={r.planners.color} size={14} />}
+                {r.planners?.name} · {STATUS_LABEL[r.status]}
+              </span>
+            </span>
+            <PriorityBadge priority={r.priority} />
+            {r.due_date && (
+              <span className={`inline-flex w-20 items-center gap-1 text-xs ${dueTextClass(r.due_date)}`}>
+                <Calendar size={13} /> {formatShort(r.due_date)}
+              </span>
+            )}
+          </Link>
+        </li>
+      ))}
+    </ul>
   )
 }
