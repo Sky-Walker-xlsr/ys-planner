@@ -11,7 +11,7 @@ import { shortName } from '@/components/ui/avatar'
 import { formatDateTime } from '@/lib/dates'
 import { kbFileUrl, request } from '@/lib/file-urls'
 import { KbSearch } from './kb-search'
-import { FindBar } from './find-bar'
+import { FindBar, SourceHighlights, type SourceFind } from './find-bar'
 import type { KbFile } from '@/lib/types'
 
 const MAX_BYTES = 2 * 1024 * 1024
@@ -228,6 +228,9 @@ function RenameDialog({ file, onClose, onSave }: { file: KbFile; onClose: () => 
   )
 }
 
+// Gemeinsame Text-Metrik für Editor und Markierungsebene (müssen exakt übereinstimmen)
+const SOURCE_TEXT = 'p-4 font-mono text-[13px] leading-relaxed [scrollbar-gutter:stable]'
+
 type SaveState = 'loading' | 'saved' | 'dirty' | 'saving' | 'error'
 
 function Editor({ file, onOpenTask, find }: { file: KbFile; onOpenTask: (id: string) => void; find: { query: string; nonce: number } | null }) {
@@ -241,6 +244,7 @@ function Editor({ file, onOpenTask, find }: { file: KbFile; onOpenTask: (id: str
   const previewRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [findState, setFindState] = useState({ open: false, query: '' })
+  const [sourceFind, setSourceFind] = useState<SourceFind>(null)
 
   // Aus der KB-Suche: mit Suchbegriff öffnen
   const findNonce = find?.nonce
@@ -371,18 +375,22 @@ function Editor({ file, onOpenTask, find }: { file: KbFile; onOpenTask: (id: str
         previewRef={previewRef}
         textareaRef={textareaRef}
         content={content}
+        onSourceFind={setSourceFind}
       />
 
       <div className={`grid min-h-0 flex-1 ${mode === 'split' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
         {mode !== 'preview' && canEdit && (
-          <textarea
-            ref={textareaRef}
-            aria-label="Markdown-Quelltext"
-            spellCheck={false}
-            className="min-h-[360px] w-full resize-none border-line bg-bg p-4 font-mono text-[13px] leading-relaxed text-text outline-none md:border-r"
-            value={content}
-            onChange={(e) => onChange(e.target.value)}
-          />
+          <div className="relative min-h-[360px] border-line bg-bg md:border-r">
+            <SourceHighlights content={content} find={sourceFind} textareaRef={textareaRef} className={SOURCE_TEXT} />
+            <textarea
+              ref={textareaRef}
+              aria-label="Markdown-Quelltext"
+              spellCheck={false}
+              className={`relative block h-full min-h-[360px] w-full resize-none overflow-y-auto bg-transparent text-text outline-none ${SOURCE_TEXT}`}
+              value={content}
+              onChange={(e) => onChange(e.target.value)}
+            />
+          </div>
         )}
         {(mode !== 'edit' || !canEdit) && (
           <div ref={previewRef} className="md-preview min-h-[360px] overflow-y-auto bg-surface p-5">
