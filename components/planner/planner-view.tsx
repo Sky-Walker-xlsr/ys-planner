@@ -18,7 +18,7 @@ import { Schedule } from './schedule'
 import { Charts } from './charts'
 import { KnowledgeBase } from './knowledge-base'
 import { TaskModal } from './task-modal'
-import { TASK_FILES_BUCKET } from './use-actions'
+import { request } from '@/lib/file-urls'
 import { ShareDialog } from './share-dialog'
 
 const TABS = [
@@ -216,12 +216,8 @@ function PlannerMenu() {
   }
 
   async function remove() {
-    // Storage-Objekte vorher löschen: danach erlauben die Policies es mangels Rolle nicht mehr
-    const kbPaths = Object.values(state.data.kb_files).map((f) => f.storage_path)
-    const taskPaths = Object.values(state.data.task_files).map((f) => f.storage_path)
-    if (kbPaths.length) await db.storage.from('knowledge-base').remove(kbPaths)
-    if (taskPaths.length) await db.storage.from(TASK_FILES_BUCKET).remove(taskPaths)
-    const { error } = await db.from('planners').delete().eq('id', planner.id)
+    // Die Route löscht auch alle Dateien des Planners in R2
+    const { error } = await request(`/api/planners/${planner.id}`, { method: 'DELETE' })
     if (error) return toast('Planner konnte nicht gelöscht werden')
     router.push('/meine-aufgaben')
   }

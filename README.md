@@ -2,7 +2,7 @@
 
 Planner-Web-App im Stil von MS Planner: Boards mit Buckets, Raster, Zeitplan, Diagramme, Knowledge Base pro Planner, Ordner-Freigaben, Share-Links für Gäste, Live-Updates und E-Mail-Benachrichtigungen.
 
-**Stack:** Next.js 16 (App Router, TypeScript) · Tailwind CSS 4 · Cloudflare Workers via `@opennextjs/cloudflare` · Supabase (Postgres, RLS, Realtime, Storage) · Zitadel (OIDC) · Resend
+**Stack:** Next.js 16 (App Router, TypeScript) · Tailwind CSS 4 · Cloudflare Workers via `@opennextjs/cloudflare` · Supabase (Postgres, RLS, Realtime) · Cloudflare R2 (Dateien) · Zitadel (OIDC) · Resend
 
 ---
 
@@ -16,6 +16,7 @@ Planner-Web-App im Stil von MS Planner: Boards mit Buckets, Raster, Zeitplan, Di
 | Datenzugriff | Der Server stellt kurzlebige **Supabase-JWTs** aus (10 Min., `role: authenticated`, `sub` = `users.id`). Browser- und Server-Client bekommen sie über die `accessToken`-Option; `/api/token` erneuert sie automatisch. RLS und Realtime greifen dadurch mit der echten User-ID. |
 | Gäste | `/s/{token}` prüft Link, Passwort, Ablauf und Widerruf und setzt ein Gast-Cookie. Gast-JWT: zufällige `sub`, Claims `share_link_id`, `planner_id`, `share_permission`, `guest_name`. RLS prüft den Link bei **jeder** Abfrage, Widerruf wirkt also sofort. |
 | Rechte | Eine SQL-Funktion `planner_role(planner_id)` liefert die effektive Rolle (höchste aus `planner_members` und `folder_members` bzw. Gast-Link). Alle Policies bauen darauf auf. |
+| Dateien | Cloudflare R2 (Binding `FILES`, Bucket `planner-files`). R2 hat kein RLS: Jeder Zugriff läuft über Route Handler, die die Metadaten-Zeile mit dem JWT des Aufrufers lesen (RLS) und `planner_role()` prüfen, also dieselbe Logik wie die Policies, inklusive Gast-Claims. Metadaten liegen in Postgres. |
 | Service-Role | Nur serverseitig: Login, Share-Link-Erstellung/-Prüfung, Mailversand, Cron. |
 | Benachrichtigungen | Zuweisen, Kommentare und Einladungen laufen über Route-Handler (mit User-JWT, RLS aktiv). Die Mail geht danach per `after()` raus. Fälligkeiten: Cron Trigger. |
 
@@ -69,7 +70,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
    - Dann *Create Standby Key → Import an existing private key*, JWK einfügen, danach **Rotate keys**.
    - Prüfen: `https://<ref>.supabase.co/auth/v1/.well-known/jwks.json` enthält die `kid`.
 
-3. **Schema einspielen** (Tabellen, Funktionen, RLS, Storage-Bucket und -Policies, Realtime-Publication):
+3. **Schema einspielen** (Tabellen, Funktionen, RLS, Realtime-Publication):
    ```bash
    npx supabase login
    npx supabase link --project-ref <ref>
@@ -93,15 +94,66 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 | `…0002_functions_triggers.sql` | `planner_role()`, `folder_role()`, Gast-Helfer, Trigger (updated_at, Positionen, Ersteller als Owner, Autor aus JWT, Aktivitätsprotokoll) |
 | `…0003_rls.sql` | Alle RLS-Policies, Spaltenrechte für `share_links` |
 | `…0004_storage_realtime.sql` | Bucket `knowledge-base` (privat, nur `text/markdown`, max. 2 MB), Storage-Policies, Realtime-Publication, Presence-Policies |
+| `…0005_task_files.sql` | Datei-Uploads an Tasks (`task_files`, damals Bucket `task-files`) |
+| `…0006_r2_paths.sql` | Trigger setzen R2-Schlüssel (`kb/…`, `tasks/…`); Mail-Anhänge bis 25 MB |
+| `…0007_drop_supabase_storage.sql` | Erst **nach** der Storage-Migration: strenge Pfad-Checks, Supabase-Storage-Policies entfernen |
 
 ### RLS-Tests
 
-`supabase/tests/rls.test.sql` prüft knapp 100 Fälle für Owner, Bearbeiter, Leser, Ordner-Mitglied, Gast-read, Gast-edit, Fremde sowie widerrufene, abgelaufene und gefälschte Gast-Links, inklusive Storage. Die Datei läuft komplett in `BEGIN … ROLLBACK`, jede Prüfung zusätzlich in einer Subtransaktion. Es bleiben **keine Daten** zurück, auch nicht gegen Produktion.
+`supabase/tests/rls.test.sql` prüft knapp 100 Fälle für Owner, Bearbeiter, Leser, Ordner-Mitglied, Gast-read, Gast-edit, Fremde sowie widerrufene, abgelaufene und gefälschte Gast-Links, inklusive der Rechte, auf die sich die R2-Routen stützen. Die Datei läuft komplett in `BEGIN … ROLLBACK`, jede Prüfung zusätzlich in einer Subtransaktion. Es bleiben **keine Daten** zurück, auch nicht gegen Produktion.
 
 ```bash
 DATABASE_URL="postgresql://postgres.<ref>:<passwort>@<host>:5432/postgres" npm run test:rls
 ```
 (Connection-String: *Project Settings → Database*, Rolle `postgres`, Session-Pooler oder Direktverbindung.)
+
+---
+
+## Cloudflare R2
+
+Alle Dateien liegen im R2-Bucket `planner-files` (Account `yannicksalm.ch`, siehe `account_id` in `wrangler.toml`):
+
+| Schlüssel | Inhalt |
+|---|---|
+| `kb/{planner_id}/{kb_file_id}.md` | Knowledge Base |
+| `tasks/{task_id}/{file_id}-{dateiname}` | Task-Anhänge |
+| `inbox/{user_id}/{task_id}/{file_id}-{dateiname}` | Anhänge von Eingangs-Tasks (per Mail) |
+
+Einrichten (einmalig, bereits erledigt):
+```bash
+npx wrangler r2 bucket create planner-files
+```
+Das Binding `FILES` steht in `wrangler.toml`. Lokal (`npm run dev`) simuliert Wrangler den Bucket unter `.wrangler/state`. Nach Änderungen an `wrangler.toml`: `npx wrangler types --env-interface CloudflareEnv --include-runtime=false cloudflare-env.d.ts`.
+
+Routen (alle mit Rechteprüfung, Gäste übergeben `?link=<share_link_id>`):
+
+| Route | Zweck |
+|---|---|
+| `GET/PUT/DELETE /api/kb/{fileId}` | Knowledge-Base-Inhalt lesen, speichern (max. 2 MB, Markdown), löschen |
+| `POST /api/tasks/{id}/files` | Datei an Task hochladen (max. 10 MB) |
+| `GET/DELETE /api/task-files/{fileId}` | Task-Datei ausliefern (`?download` erzwingt Download) bzw. löschen |
+| `DELETE /api/tasks/{id}`, `DELETE /api/planners/{id}` | Löschen inkl. aller Dateien in R2 |
+
+Downloads werden durch den Worker gestreamt. Da sie von der App-Domain kommen, werden nur Rasterbilder inline ausgeliefert. Alles andere geht als Download raus, mit `X-Content-Type-Options: nosniff` und `Content-Security-Policy: sandbox`.
+
+### Storage-Migration (Supabase Storage → R2)
+
+Einmalig, für Dateien aus der Zeit vor R2:
+
+1. Code mit R2-Unterstützung deployen und Migration `…0006_r2_paths.sql` anwenden. Neue Dateien landen ab jetzt in R2. Alte Zeilen liefern bis Schritt 2 `503 Speicher-Migration ausstehend`, es geht also nichts verloren.
+2. Kopieren und verifizieren:
+   ```bash
+   node --env-file=.env.local scripts/migrate-storage-to-r2.mjs --dry-run
+   node --env-file=.env.local scripts/migrate-storage-to-r2.mjs
+   ```
+   Das Skript lädt jedes Objekt aus `knowledge-base` bzw. `task-files`, schreibt es per Wrangler nach R2, liest es zurück und vergleicht die SHA-256-Prüfsumme. Erst danach stellt es `storage_path` um. Bei Fehlern endet es mit Exit-Code 1 und kann einfach erneut laufen.
+3. Verifizieren: Das Skript meldet „Alle Dateien kopiert und verifiziert“. Zusätzlich darf diese Abfrage keine Zeilen liefern:
+   ```sql
+   select id from kb_files where storage_path not like 'kb/%'
+   union all select id from task_files where storage_path !~ '^(tasks|inbox)/';
+   ```
+4. Migration `…0007_drop_supabase_storage.sql` anwenden (Pfad-Checks, Storage-Policies weg).
+5. **Erst dann** die Supabase-Buckets löschen: Dashboard → *Storage* → `knowledge-base` und `task-files` → *Delete bucket*. Supabase erlaubt das Löschen nicht per SQL.
 
 ---
 

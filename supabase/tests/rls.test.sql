@@ -125,7 +125,6 @@ declare
   T1 constant text := '''e0000000-0000-4000-8000-000000000001''';
   T2 constant text := '''e0000000-0000-4000-8000-000000000002''';
   FO constant text := '''b0000000-0000-4000-8000-000000000001''';
-  KB constant text := '''c0000000-0000-4000-8000-000000000001/f0000000-0000-4000-8000-000000000001.md''';
 
   owner    jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000001');
   editor   jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000002');
@@ -161,23 +160,18 @@ declare
   move_p2_into_folder text := 'update public.planners set folder_id = ' || FO || ' where id = ' || P2;
   rename_folder text := 'update public.folders set name = ''Neu'' where id = ' || FO;
   ins_folder_member text := 'insert into public.folder_members (folder_id, user_id, role) values (' || FO || ', ''a0000000-0000-4000-8000-000000000005'', ''viewer'')';
-  sel_obj text := 'select 1 from storage.objects where bucket_id = ''knowledge-base'' and name = ' || KB;
-  ins_obj2 text := 'insert into storage.objects (bucket_id, name) values (''knowledge-base'', ''c0000000-0000-4000-8000-000000000001/f0000000-0000-4000-8000-000000000002.md'')';
-  ins_obj_orphan text := 'insert into storage.objects (bucket_id, name) values (''knowledge-base'', ''c0000000-0000-4000-8000-000000000001/f0000000-0000-4000-8000-0000000000ff.md'')';
+  -- R2-Routen: Lesen = Zeile per RLS sichtbar, Schreiben = planner_role() mindestens editor
+  sel_obj text := 'select id from public.kb_files where id = ''f0000000-0000-4000-8000-000000000001''';
+  r2_write text := 'select 1 where public.planner_role(' || P || ') in (''owner'', ''editor'')';
   ins_assignee_stranger text := 'insert into public.task_assignees (task_id, user_id, planner_id) values (' || T1 || ', ''a0000000-0000-4000-8000-000000000005'', ' || P || ')';
   ins_assignee_editor text := 'insert into public.task_assignees (task_id, user_id, planner_id) values (' || T1 || ', ''a0000000-0000-4000-8000-000000000002'', ' || P || ')';
   sel_users text := 'select id from public.users where email like ''%@test.local''';
-  TF constant text := '''c0000000-0000-4000-8000-000000000001/e0000000-0000-4000-8000-000000000001/70000000-0000-4000-8000-000000000001''';
   ins_task_file text := 'insert into public.task_files (id, task_id, planner_id, name, size_bytes, storage_path) values (''70000000-0000-4000-8000-000000000002'', ' || T1 || ', ' || P || ', ''Plan.pdf'', 10, '''')';
   sel_task_files text := 'select id from public.task_files where task_id = ' || T1;
   del_task_file text := 'delete from public.task_files where id = ''70000000-0000-4000-8000-000000000001''';
   upd_task_file text := 'update public.task_files set name = ''x'' where id = ''70000000-0000-4000-8000-000000000001''';
-  sel_tf_obj text := 'select 1 from storage.objects where bucket_id = ''task-files'' and name = ' || TF;
-  ins_tf_obj_orphan text := 'insert into storage.objects (bucket_id, name) values (''task-files'', ''c0000000-0000-4000-8000-000000000001/e0000000-0000-4000-8000-000000000001/70000000-0000-4000-8000-0000000000ff'')';
+  sel_tf_obj text := 'select id from public.task_files where id = ''70000000-0000-4000-8000-000000000001''';
 begin
-  -- Fixture für Storage-Lesetests
-  insert into storage.objects (bucket_id, name) values ('knowledge-base', 'c0000000-0000-4000-8000-000000000001/f0000000-0000-4000-8000-000000000001.md');
-  insert into storage.objects (bucket_id, name) values ('task-files', 'c0000000-0000-4000-8000-000000000001/e0000000-0000-4000-8000-000000000001/70000000-0000-4000-8000-000000000001');
 
   -- Owner -------------------------------------------------------------------
   perform pg_temp.check('owner', owner, 'sieht beide Planner', 'rows', 'select id from public.planners where id in (' || P || ',' || P2 || ')', 2);
@@ -207,13 +201,11 @@ begin
   perform pg_temp.check('editor', editor, 'Kommentieren', 'can', ins_comment);
   perform pg_temp.check('editor', editor, 'eigenen Kommentar ändern', 'can', upd_editor_comment);
   perform pg_temp.check('editor', editor, 'KB-Datei anlegen', 'can', ins_kb);
-  perform pg_temp.check('editor', editor, 'KB-Objekt hochladen', 'can', ins_obj2);
-  perform pg_temp.check('editor', editor, 'KB-Objekt ohne kb_files-Zeile verboten', 'cannot', ins_obj_orphan);
+  perform pg_temp.check('editor', editor, 'R2-Route: Schreibrecht', 'rows', r2_write, 1);
   perform pg_temp.check('editor', editor, 'sich selbst zuweisen', 'can', ins_assignee_editor);
   perform pg_temp.check('editor', editor, 'Task-Datei anlegen', 'can', ins_task_file);
   perform pg_temp.check('editor', editor, 'Task-Datei löschen', 'can', del_task_file);
   perform pg_temp.check('editor', editor, 'Task-Datei ändern verboten', 'cannot', upd_task_file);
-  perform pg_temp.check('editor', editor, 'Task-Objekt ohne task_files-Zeile verboten', 'cannot', ins_tf_obj_orphan);
   perform pg_temp.check('editor', editor, 'Planner umbenennen verboten', 'cannot', upd_planner);
   perform pg_temp.check('editor', editor, 'Planner löschen verboten', 'cannot', del_planner);
   perform pg_temp.check('editor', editor, 'Mitglieder einladen verboten', 'cannot', ins_member);
@@ -223,9 +215,9 @@ begin
   -- Leser -------------------------------------------------------------------
   perform pg_temp.check('viewer', viewer, 'sieht Tasks von P', 'rows', 'select id from public.tasks where planner_id = ' || P, 1);
   perform pg_temp.check('viewer', viewer, 'sieht Kommentare', 'rows', 'select id from public.comments where planner_id = ' || P, 1);
-  perform pg_temp.check('viewer', viewer, 'liest KB-Objekt', 'rows', sel_obj, 1);
+  perform pg_temp.check('viewer', viewer, 'R2-Route: liest KB-Datei', 'rows', sel_obj, 1);
   perform pg_temp.check('viewer', viewer, 'sieht Task-Dateien', 'rows', sel_task_files, 1);
-  perform pg_temp.check('viewer', viewer, 'liest Task-Objekt', 'rows', sel_tf_obj, 1);
+  perform pg_temp.check('viewer', viewer, 'R2-Route: liest Task-Datei', 'rows', sel_tf_obj, 1);
   perform pg_temp.check('viewer', viewer, 'Task-Datei anlegen verboten', 'cannot', ins_task_file);
   perform pg_temp.check('viewer', viewer, 'Task-Datei löschen verboten', 'cannot', del_task_file);
   perform pg_temp.check('viewer', viewer, 'Task anlegen verboten', 'cannot', ins_task);
@@ -233,8 +225,7 @@ begin
   perform pg_temp.check('viewer', viewer, 'Task löschen verboten', 'cannot', del_task);
   perform pg_temp.check('viewer', viewer, 'Kommentieren verboten', 'cannot', ins_comment);
   perform pg_temp.check('viewer', viewer, 'KB-Datei anlegen verboten', 'cannot', ins_kb);
-  perform pg_temp.check('viewer', viewer, 'KB-Objekt hochladen verboten', 'cannot', ins_obj2);
-  perform pg_temp.check('viewer', viewer, 'KB-Objekt schreiben verboten', 'cannot', 'update storage.objects set metadata = ''{}'' where bucket_id = ''knowledge-base'' and name = ' || KB);
+  perform pg_temp.check('viewer', viewer, 'R2-Route: kein Schreibrecht', 'rows', r2_write, 0);
   perform pg_temp.check('viewer', viewer, 'Bucket anlegen verboten', 'cannot', ins_bucket);
   perform pg_temp.check('viewer', viewer, 'fremden Kommentar ändern verboten', 'cannot', upd_editor_comment);
 
@@ -252,9 +243,9 @@ begin
   perform pg_temp.check('stranger', stranger, 'sieht keine fremden Planner', 'rows', 'select id from public.planners where id in (' || P || ',' || P2 || ')', 0);
   perform pg_temp.check('stranger', stranger, 'sieht keine Tasks', 'rows', 'select id from public.tasks where id in (' || T1 || ',' || T2 || ')', 0);
   perform pg_temp.check('stranger', stranger, 'sieht keinen Ordner', 'rows', 'select id from public.folders where id = ' || FO, 0);
-  perform pg_temp.check('stranger', stranger, 'liest kein KB-Objekt', 'rows', sel_obj, 0);
+  perform pg_temp.check('stranger', stranger, 'R2-Route: liest keine KB-Datei', 'rows', sel_obj, 0);
   perform pg_temp.check('stranger', stranger, 'sieht keine Task-Dateien', 'rows', sel_task_files, 0);
-  perform pg_temp.check('stranger', stranger, 'liest kein Task-Objekt', 'rows', sel_tf_obj, 0);
+  perform pg_temp.check('stranger', stranger, 'R2-Route: liest keine Task-Datei', 'rows', sel_tf_obj, 0);
   perform pg_temp.check('stranger', stranger, 'Task anlegen verboten', 'cannot', ins_task);
   perform pg_temp.check('stranger', stranger, 'Mitglied werden verboten', 'cannot', ins_member);
   perform pg_temp.check('stranger', stranger, 'eigenen Planner anlegen', 'can', ins_planner);
@@ -270,14 +261,14 @@ begin
   perform pg_temp.check('guest-read', g_read, 'sieht P', 'rows', 'select id from public.planners where id = ' || P, 1);
   perform pg_temp.check('guest-read', g_read, 'sieht Tasks von P', 'rows', 'select id from public.tasks where planner_id = ' || P, 1);
   perform pg_temp.check('guest-read', g_read, 'sieht P2 nicht', 'rows', 'select id from public.tasks where id = ' || T2, 0);
-  perform pg_temp.check('guest-read', g_read, 'liest KB-Objekt', 'rows', sel_obj, 1);
-  perform pg_temp.check('guest-read', g_read, 'liest Task-Objekt', 'rows', sel_tf_obj, 1);
+  perform pg_temp.check('guest-read', g_read, 'R2-Route: liest KB-Datei', 'rows', sel_obj, 1);
+  perform pg_temp.check('guest-read', g_read, 'R2-Route: liest Task-Datei', 'rows', sel_tf_obj, 1);
   perform pg_temp.check('guest-read', g_read, 'Task-Datei anlegen verboten', 'cannot', ins_task_file);
   perform pg_temp.check('guest-edit', g_edit, 'Task-Datei anlegen', 'can', ins_task_file);
   perform pg_temp.check('guest-revoked', g_revoked, 'Task-Datei anlegen verboten', 'cannot', ins_task_file);
   perform pg_temp.check('guest-read', g_read, 'sieht nur Mitglieder (owner, editor, viewer, folder)', 'rows', sel_users, 4);
   perform pg_temp.check('guest-read', g_read, 'Task anlegen verboten', 'cannot', ins_task);
-  perform pg_temp.check('guest-read', g_read, 'KB-Objekt hochladen verboten', 'cannot', ins_obj2);
+  perform pg_temp.check('guest-read', g_read, 'R2-Route: kein Schreibrecht', 'rows', r2_write, 0);
   perform pg_temp.check('guest-read', g_read, 'Kommentieren verboten', 'cannot', ins_comment);
   perform pg_temp.check('guest-read', g_read, 'Share-Links unsichtbar', 'rows', sel_links, 0);
   perform pg_temp.check('guest-read', g_read, 'Ordner unsichtbar', 'rows', 'select id from public.folders', 0);
@@ -292,7 +283,8 @@ begin
   perform pg_temp.check('guest-edit', g_edit, 'Kommentieren (mit Gastname)', 'can', ins_comment);
   perform pg_temp.check('guest-edit', g_edit, 'Bucket anlegen', 'can', ins_bucket);
   perform pg_temp.check('guest-edit', g_edit, 'KB-Datei anlegen', 'can', ins_kb);
-  perform pg_temp.check('guest-edit', g_edit, 'KB-Objekt hochladen', 'can', ins_obj2);
+  perform pg_temp.check('guest-edit', g_edit, 'R2-Route: Schreibrecht', 'rows', r2_write, 1);
+  perform pg_temp.check('guest-edit', g_edit, 'R2-Route: liest KB-Datei', 'rows', sel_obj, 1);
   perform pg_temp.check('guest-edit', g_edit, 'fremden Kommentar ändern verboten', 'cannot', upd_editor_comment);
   perform pg_temp.check('guest-edit', g_edit, 'Planner umbenennen verboten', 'cannot', upd_planner);
   perform pg_temp.check('guest-edit', g_edit, 'Planner löschen verboten', 'cannot', del_planner);
@@ -306,6 +298,10 @@ begin
   -- Ungültige Gastzugänge ---------------------------------------------------
   perform pg_temp.check('guest-revoked', g_revoked, 'widerrufener Link sieht nichts', 'rows', 'select id from public.tasks where planner_id = ' || P, 0);
   perform pg_temp.check('guest-expired', g_expired, 'abgelaufener Link sieht nichts', 'rows', 'select id from public.tasks where planner_id = ' || P, 0);
+  perform pg_temp.check('guest-revoked', g_revoked, 'R2-Route: widerrufener Link liest keine Datei', 'rows', sel_obj, 0);
+  perform pg_temp.check('guest-expired', g_expired, 'R2-Route: abgelaufener Link liest keine Datei', 'rows', sel_tf_obj, 0);
+  perform pg_temp.check('guest-forged', g_forged, 'R2-Route: gefälschter Claim liest keine Datei', 'rows', sel_obj, 0);
+  perform pg_temp.check('guest-revoked', g_revoked, 'R2-Route: widerrufener Link ohne Schreibrecht', 'rows', r2_write, 0);
   perform pg_temp.check('guest-forged', g_forged, 'gefälschter planner_id-Claim sieht P2 nicht', 'rows', 'select id from public.tasks where planner_id = ' || P2, 0);
   perform pg_temp.check('guest-forged', g_forged, 'gefälschter Claim sieht auch P nicht', 'rows', 'select id from public.tasks where planner_id = ' || P, 0);
 end

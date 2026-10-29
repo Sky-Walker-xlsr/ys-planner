@@ -13,7 +13,8 @@ import { LABEL_COLORS, LABEL_COLOR_NAMES, labelStyle } from '@/lib/design'
 import { formatDateTime, isOverdue, relativeTime } from '@/lib/dates'
 import { formatBytes } from '@/lib/image'
 import { PRIORITY_LABEL, STATUS_LABEL, type SectionItem, type TaskFile, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
-import { TASK_FILES_BUCKET, useActions } from './use-actions'
+import { taskFileUrl } from '@/lib/file-urls'
+import { useActions } from './use-actions'
 
 export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onClose: () => void; onOpenFile: (id: string) => void }) {
   const { state, canEdit, setPresence, presence } = usePlanner()
@@ -473,7 +474,7 @@ function ItemRow({ item }: { item: SectionItem }) {
 // Anhänge
 // ---------------------------------------------------------------------------
 function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: string) => void }) {
-  const { state, db, canEdit } = usePlanner()
+  const { state, canEdit, viewer } = usePlanner()
   const actions = useActions()
   const attached = Object.values(state.data.task_attachments).filter((a) => a.task_id === taskId)
   const files = attached.map((a) => state.data.kb_files[a.kb_file_id]).filter(Boolean)
@@ -487,7 +488,6 @@ function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: 
   const [busy, setBusy] = useState(0)
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-  const thumbs = useSignedUrls(db, uploads.filter((f) => f.mime_type.startsWith('image/')))
 
   async function upload(list: FileList | File[]) {
     const all = Array.from(list)
@@ -498,13 +498,9 @@ function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: 
     }
   }
 
-  async function open(file: TaskFile) {
-    const isImg = file.mime_type.startsWith('image/')
-    const { data, error } = await db.storage
-      .from(TASK_FILES_BUCKET)
-      .createSignedUrl(file.storage_path, 300, isImg ? undefined : { download: file.name })
-    if (error || !data) return toast('Datei konnte nicht geöffnet werden')
-    window.open(data.signedUrl, '_blank', 'noopener')
+  // Bilder im neuen Tab anzeigen, alles andere herunterladen (Auslieferung durch den Worker aus R2)
+  function open(file: TaskFile) {
+    window.open(taskFileUrl(file.id, viewer, { download: !file.mime_type.startsWith('image/') }), '_blank', 'noopener')
   }
 
   return (
@@ -520,10 +516,10 @@ function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: 
         <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {uploads.map((f) => (
             <div key={f.id} className="group relative flex items-center gap-3 rounded-card border border-line bg-surface p-3 hover:border-accent">
-              <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer" onClick={() => void open(f)}>
-                {thumbs[f.id] ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- signierte Storage-URL, kein next/image
-                  <img src={thumbs[f.id]} alt="" className="size-9 shrink-0 rounded-md object-cover" />
+              <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer" onClick={() => open(f)}>
+                {f.mime_type.startsWith('image/') && f.mime_type !== 'image/svg+xml' ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- Datei-Route mit Rechteprüfung, kein next/image
+                  <img src={taskFileUrl(f.id, viewer)} alt="" loading="lazy" className="size-9 shrink-0 rounded-md object-cover" />
                 ) : (
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-bg text-text-2">
                     {f.mime_type.startsWith('image/') ? <ImageIcon size={18} /> : <Paperclip size={18} />}
@@ -602,31 +598,6 @@ function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: 
       )}
     </section>
   )
-}
-
-/** Signierte URLs für Vorschaubilder; werden nur für neu hinzugekommene Dateien geholt. */
-function useSignedUrls(db: ReturnType<typeof usePlanner>['db'], files: TaskFile[]) {
-  const [urls, setUrls] = useState<Record<string, string>>({})
-  const missing = files.filter((f) => !urls[f.id])
-  const missingKey = missing.map((f) => f.id).join(',')
-  useEffect(() => {
-    if (!missingKey) return
-    let cancelled = false
-    const wanted = files.filter((f) => missingKey.includes(f.id))
-    void db.storage
-      .from(TASK_FILES_BUCKET)
-      .createSignedUrls(wanted.map((f) => f.storage_path), 3600)
-      .then(({ data }) => {
-        if (cancelled || !data) return
-        const next: Record<string, string> = {}
-        data.forEach((d, i) => { if (d.signedUrl) next[wanted[i].id] = d.signedUrl })
-        setUrls((prev) => ({ ...prev, ...next }))
-      })
-    return () => { cancelled = true }
-    // files ist über missingKey abgedeckt
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [db, missingKey])
-  return urls
 }
 
 function DeleteTask({ taskId, onDeleted }: { taskId: string; onDeleted: () => void }) {

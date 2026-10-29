@@ -3,9 +3,9 @@ import { useMemo } from 'react'
 import { usePlanner, positionBetween, sortByPosition } from '@/lib/store/planner-store'
 import { toast } from '@/components/ui/toast'
 import { ImageConversionError, isImage, toWebp } from '@/lib/image'
+import { fileUrl, request } from '@/lib/file-urls'
 import type { Label, SectionItem, Task, TaskFile, TaskPriority, TaskSection, TaskStatus } from '@/lib/types'
 
-export const TASK_FILES_BUCKET = 'task-files'
 const MAX_TASK_FILE_BYTES = 10 * 1024 * 1024
 
 export function useActions() {
@@ -15,6 +15,7 @@ export function useActions() {
 
   return useMemo(() => {
     const now = () => new Date().toISOString()
+    const withLink = (path: string) => fileUrl(path, viewer)
 
     async function post(url: string, body: Record<string, unknown>) {
       const res = await fetch(url, {
@@ -81,16 +82,14 @@ export function useActions() {
         )
       },
 
-      async deleteTask(id: string) {
+      deleteTask(id: string) {
         const prev = state.data.tasks[id]
-        const files = Object.values(state.data.task_files).filter((f) => f.task_id === id)
-        const ok = await mutate(
+        // Die Route löscht auch die Dateien des Tasks in R2
+        return mutate(
           () => apply('delete', 'tasks', [prev]),
-          () => db.from('tasks').delete().eq('id', id),
+          () => request(withLink(`/api/tasks/${id}`), { method: 'DELETE' }),
           'Aufgabe konnte nicht gelöscht werden',
         )
-        if (ok && files.length) await db.storage.from(TASK_FILES_BUCKET).remove(files.map((f) => f.storage_path))
-        return ok
       },
 
       async assign(taskId: string, userId: string) {
@@ -266,42 +265,24 @@ export function useActions() {
           toast(`${file.name}: grösser als 10 MB`)
           return false
         }
-        const id = crypto.randomUUID()
-        const row: TaskFile = {
-          id, task_id: taskId, planner_id: plannerId, name: file.name.replace(/[/\\]/g, '-').slice(-200),
-          mime_type: file.type || 'application/octet-stream', size_bytes: file.size,
-          storage_path: `${plannerId}/${taskId}/${id}`,
-          uploaded_by: viewer.kind === 'user' ? viewer.id : null,
-          uploaded_by_guest: viewer.kind === 'guest' ? viewer.name : null,
-          created_at: now(),
-        }
-        // Zeile zuerst: die Storage-Policy verlangt eine passende task_files-Zeile
-        const { error } = await db.from('task_files').insert({
-          id, task_id: taskId, planner_id: plannerId, name: row.name,
-          mime_type: row.mime_type, size_bytes: row.size_bytes, storage_path: row.storage_path,
-        })
-        if (error) {
+        // Der Worker prüft Rolle, Grösse und MIME-Typ und schreibt nach R2
+        const form = new FormData()
+        form.append('file', file)
+        const { error, res } = await request(withLink(`/api/tasks/${taskId}/files`), { method: 'POST', body: form })
+        if (error || !res) {
           toast(`${file.name} konnte nicht hochgeladen werden`)
           return false
         }
-        const up = await db.storage.from(TASK_FILES_BUCKET).upload(row.storage_path, file, { contentType: row.mime_type })
-        if (up.error) {
-          await db.from('task_files').delete().eq('id', id)
-          toast(`${file.name} konnte nicht hochgeladen werden`)
-          return false
-        }
-        apply('upsert', 'task_files', [row])
+        apply('upsert', 'task_files', [(await res.json()) as TaskFile])
         return true
       },
 
-      async deleteTaskFile(file: TaskFile) {
-        const ok = await mutate(
+      deleteTaskFile(file: TaskFile) {
+        return mutate(
           () => apply('delete', 'task_files', [file]),
-          () => db.from('task_files').delete().eq('id', file.id),
+          () => request(withLink(`/api/task-files/${file.id}`), { method: 'DELETE' }),
           'Datei konnte nicht gelöscht werden',
         )
-        if (ok) await db.storage.from(TASK_FILES_BUCKET).remove([file.storage_path])
-        return ok
       },
 
       async postComment(taskId: string, body: string, mentions: string[]) {

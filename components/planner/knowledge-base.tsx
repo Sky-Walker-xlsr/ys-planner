@@ -9,9 +9,9 @@ import { Modal } from '@/components/ui/modal'
 import { toast } from '@/components/ui/toast'
 import { shortName } from '@/components/ui/avatar'
 import { formatDateTime } from '@/lib/dates'
+import { kbFileUrl, request } from '@/lib/file-urls'
 import type { KbFile } from '@/lib/types'
 
-const BUCKET = 'knowledge-base'
 const MAX_BYTES = 2 * 1024 * 1024
 type Mode = 'edit' | 'split' | 'preview'
 
@@ -29,7 +29,7 @@ export function KnowledgeBase({
   onSelectFile: (id: string | null) => void
   onOpenTask: (id: string) => void
 }) {
-  const { state, db, canEdit, apply, mutate } = usePlanner()
+  const { state, db, canEdit, apply, mutate, viewer } = usePlanner()
   const plannerId = state.planner!.id
   const files = useMemo(
     () => Object.values(state.data.kb_files).sort((a, b) => a.name.localeCompare(b.name, 'de')),
@@ -58,7 +58,8 @@ export function KnowledgeBase({
 
   async function createFile(name: string, content: string) {
     const id = crypto.randomUUID()
-    const storage_path = `${plannerId}/${id}.md`
+    // storage_path (R2-Schlüssel) setzt der Trigger
+    const storage_path = `kb/${plannerId}/${id}.md`
     const row: KbFile = {
       id, planner_id: plannerId, name: uniqueName(name), storage_path,
       updated_by: null, updated_by_guest: null, updated_at: new Date().toISOString(),
@@ -69,11 +70,14 @@ export function KnowledgeBase({
       'Datei konnte nicht angelegt werden',
     )
     if (!ok) return
-    const { error } = await db.storage.from(BUCKET).upload(storage_path, new Blob([content], { type: 'text/markdown' }), {
-      contentType: 'text/markdown',
-      upsert: true,
-    })
-    if (error) toast('Inhalt konnte nicht gespeichert werden')
+    if (content) {
+      const { error } = await request(kbFileUrl(id, viewer), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/markdown' },
+        body: content,
+      })
+      if (error) toast('Inhalt konnte nicht gespeichert werden')
+    }
     onSelectFile(id)
   }
 
@@ -106,11 +110,10 @@ export function KnowledgeBase({
         apply('delete', 'task_attachments', links)
         apply('delete', 'kb_files', [file])
       },
-      () => db.from('kb_files').delete().eq('id', file.id),
+      () => request(kbFileUrl(file.id, viewer), { method: 'DELETE' }),
       'Datei konnte nicht gelöscht werden',
     )
-    if (ok) await db.storage.from(BUCKET).remove([file.storage_path])
-    if (selected?.id === file.id) onSelectFile(null)
+    if (ok && selected?.id === file.id) onSelectFile(null)
   }
 
   return (
@@ -223,7 +226,7 @@ function RenameDialog({ file, onClose, onSave }: { file: KbFile; onClose: () => 
 type SaveState = 'loading' | 'saved' | 'dirty' | 'saving' | 'error'
 
 function Editor({ file, onOpenTask }: { file: KbFile; onOpenTask: (id: string) => void }) {
-  const { db, canEdit, state, setPresence, presence, broadcast, onBroadcast } = usePlanner()
+  const { canEdit, state, setPresence, presence, broadcast, onBroadcast, viewer } = usePlanner()
   const [mode, setMode] = useState<Mode>(canEdit ? 'split' : 'preview')
   const [content, setContent] = useState('')
   const [status, setStatus] = useState<SaveState>('loading')
@@ -232,15 +235,19 @@ function Editor({ file, onOpenTask }: { file: KbFile; onOpenTask: (id: string) =
   const latest = useRef('')
 
   const load = useCallback(async () => {
-    const { data, error } = await db.storage.from(BUCKET).download(file.storage_path)
-    // Fehlt das Objekt noch (z. B. Seed-Daten), gilt die Datei als leer
-    const text = error || !data ? '' : await data.text()
+    // Fehlt das Objekt noch (z. B. Seed-Daten), liefert die Route einen leeren Inhalt
+    const { error, res } = await request(kbFileUrl(file.id, viewer), { cache: 'no-store' })
+    if (error || !res) {
+      setStatus('error')
+      return
+    }
+    const text = await res.text()
     if (!dirty.current) {
       setContent(text)
       latest.current = text
       setStatus('saved')
     }
-  }, [db, file.storage_path])
+  }, [file.id, viewer])
 
   useEffect(() => {
     void load()
@@ -263,22 +270,22 @@ function Editor({ file, onOpenTask }: { file: KbFile; onOpenTask: (id: string) =
       return
     }
     setStatus('saving')
-    const { error } = await db.storage.from(BUCKET).upload(file.storage_path, new Blob([text], { type: 'text/markdown' }), {
-      contentType: 'text/markdown',
-      upsert: true,
+    // Die Route schreibt nach R2 und aktualisiert updated_at/updated_by
+    const { error } = await request(kbFileUrl(file.id, viewer), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/markdown' },
+      body: text,
     })
     if (error) {
       setStatus('error')
       return
     }
-    // updated_at/updated_by setzt der Trigger
-    await db.from('kb_files').update({ name: file.name }).eq('id', file.id)
     if (latest.current === text) {
       dirty.current = false
       setStatus('saved')
     }
     broadcast('kb:saved', { fileId: file.id })
-  }, [db, file, broadcast])
+  }, [file.id, viewer, broadcast])
 
   // Beim Verlassen ungespeicherte Änderungen sofort schreiben
   useEffect(() => () => { if (timer.current) { clearTimeout(timer.current); void save() } }, [save])
