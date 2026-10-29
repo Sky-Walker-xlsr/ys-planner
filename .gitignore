@@ -1,0 +1,12 @@
+node_modules
+.next
+.open-next
+.wrangler
+.dev.vars
+.env
+.env.local
+*.tsbuildinfo
+next-env.d.ts
+signing-key*.json
+supabase/.temp
+supabase/.branches
