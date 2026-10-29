@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   const as = await authorizationServer()
   const client = oidcClient()
 
-  let claims: oauth.IDToken
+  let claims: oauth.IDToken | oauth.UserInfoResponse
   try {
     const params = oauth.validateAuthResponse(as, client, req.nextUrl.searchParams, stored.state)
     const response = await oauth.authorizationCodeGrantRequest(
@@ -25,6 +25,15 @@ export async function GET(req: NextRequest) {
       requireIdToken: true,
     })
     claims = oauth.getValidatedIdTokenClaims(result)!
+    // Zitadel liefert Profil-Claims nur mit «User Info inside ID Token» im ID-Token,
+    // sonst über den Userinfo-Endpoint
+    if (!claims.email || !(claims.name || claims.preferred_username)) {
+      const info = await oauth.processUserInfoResponse(
+        as, client, claims.sub,
+        await oauth.userInfoRequest(as, client, result.access_token),
+      )
+      claims = { ...claims, ...info }
+    }
   } catch (err) {
     console.error('OIDC-Callback fehlgeschlagen', err)
     return new NextResponse('Anmeldung fehlgeschlagen. Bitte erneut versuchen.', { status: 400 })
