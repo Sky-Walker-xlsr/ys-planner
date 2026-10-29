@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Filter, MoreHorizontal, Star } from 'lucide-react'
-import { usePlanner, sortByPosition, useTaskIndex } from '@/lib/store/planner-store'
+import { usePlanner, useTaskIndex } from '@/lib/store/planner-store'
 import { AvatarStack, PlannerIcon } from '@/components/ui/avatar'
 import { Checkbox, MenuItem, Popover, PrioritySquare } from '@/components/ui/controls'
 import { Modal } from '@/components/ui/modal'
@@ -30,7 +30,7 @@ const TABS = [
 type View = (typeof TABS)[number]['key']
 
 export function PlannerView({ guest = false }: { guest?: boolean }) {
-  const { state, members, isOwner, viewer, db } = usePlanner()
+  const { state, members, isOwner, viewer } = usePlanner()
   const router = useRouter()
   const pathname = usePathname()
   const search = useSearchParams()
@@ -152,14 +152,8 @@ export function PlannerView({ guest = false }: { guest?: boolean }) {
         <TaskModal taskId={taskId} onClose={() => setParams({ task: null })} onOpenFile={openFile} />
       )}
       {shareOpen && <ShareDialog onClose={() => setShareOpen(false)} />}
-      <DbRef db={db} />
     </div>
   )
-}
-
-// Hält keine Logik – verhindert nur, dass ungenutzte Variablen-Warnungen den Kontext verschleiern
-function DbRef(_: { db: unknown }) {
-  return null
 }
 
 function FavoriteStar({ plannerId, userId }: { plannerId: string; userId: string }) {
@@ -290,7 +284,7 @@ function PlannerMenu() {
 
 function FilterMenu({ filters, onChange }: { filters: Filters; onChange: (f: Filters) => void }) {
   const { members, state } = usePlanner()
-  const labels = sortByPosition(Object.values(state.data.labels).map((l) => ({ ...l, position: 0 })))
+  const labels = Object.values(state.data.labels).sort((a, b) => a.name.localeCompare(b.name))
   const count = activeFilterCount(filters)
 
   function toggle<K extends keyof Filters>(key: K, value: Filters[K][number]) {

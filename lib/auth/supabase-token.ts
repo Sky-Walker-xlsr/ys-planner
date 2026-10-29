@@ -14,7 +14,9 @@ async function signingKey() {
   if (cached?.raw === raw) return cached
   const jwk = JSON.parse(raw) as JWK
   if (!jwk.kid) throw new Error('SUPABASE_JWT_PRIVATE_KEY braucht eine kid')
-  const key = (await importJWK(jwk, 'ES256')) as CryptoKey
+  // key_ops ["sign","verify"] (Format von Supabase) lehnt WebCrypto für private Schlüssel ab
+  const { key_ops: _ops, use: _use, ext: _ext, ...signingJwk } = jwk
+  const key = (await importJWK(signingJwk, 'ES256')) as CryptoKey
   cached = { raw, key, kid: jwk.kid }
   return cached
 }

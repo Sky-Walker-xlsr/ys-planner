@@ -157,7 +157,9 @@ export function PlannerProvider({
   const presenceState = useRef<{ taskId?: string | null; kbFileId?: string | null }>({})
   const broadcastHandlers = useRef(new Map<string, Set<(p: Record<string, unknown>) => void>>())
   const stateRef = useRef(state)
-  stateRef.current = state
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
 
   const fetchUsers = useCallback(
     async (ids: string[]) => {

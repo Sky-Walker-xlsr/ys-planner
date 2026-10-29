@@ -23,6 +23,7 @@ const NO_FOLDER = '__none__'
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const me = useCurrentUser()
+  const router = useRouter()
   const { data, roles, db, reload } = useSidebarData(me.id)
   const params = useParams<{ plannerId?: string }>()
   const pathname = usePathname()
@@ -211,7 +212,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             setNewPlannerOpen(false)
             await reload()
             onNavigate?.()
-            window.location.assign(`/p/${id}`)
+            router.push(`/p/${id}`)
           }}
         />
       )}
