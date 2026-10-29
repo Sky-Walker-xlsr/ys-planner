@@ -1,4 +1,4 @@
--- Planner: Row Level Security
+-- ys-planner: Row Level Security
 -- Alle Policies bauen auf public.planner_role(planner_id) bzw. app.has_role() auf.
 
 alter table public.users enable row level security;
@@ -55,8 +55,9 @@ create policy folders_update on public.folders for update to authenticated
 create policy folders_delete on public.folders for delete to authenticated
   using (public.folder_role(id) = 'owner');
 
+-- Gäste sehen die Mitglieder des Ordners ihres Planners (Zuweisen), nicht aber den Ordner selbst
 create policy folder_members_select on public.folder_members for select to authenticated
-  using (app.can_see_folder(folder_id));
+  using (app.can_see_folder(folder_id) or app.guest_sees_folder(folder_id));
 create policy folder_members_insert on public.folder_members for insert to authenticated
   with check (public.folder_role(folder_id) = 'owner');
 create policy folder_members_update on public.folder_members for update to authenticated

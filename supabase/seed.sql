@@ -1,4 +1,4 @@
--- Planner: Demodaten
+-- ys-planner: Demodaten
 -- Die Demo-User haben fiktive zitadel_sub-Werte. Um einen davon mit deinem
 -- Zitadel-Login zu übernehmen:
 --   update public.users set zitadel_sub = '<deine sub>' where email = 'anna.meier@example.com';

@@ -1,4 +1,4 @@
--- RLS-Tests für Planner.
+-- RLS-Tests für ys-planner.
 -- Läuft vollständig in einer Transaktion und endet mit ROLLBACK: es bleibt
 -- nichts in der Datenbank zurück (auch gefahrlos gegen Produktion).
 -- Ausführen: npm run test:rls   (benötigt DATABASE_URL, Rolle postgres)
@@ -253,6 +253,8 @@ begin
   perform pg_temp.check('guest-read', g_read, 'Kommentieren verboten', 'cannot', ins_comment);
   perform pg_temp.check('guest-read', g_read, 'Share-Links unsichtbar', 'rows', sel_links, 0);
   perform pg_temp.check('guest-read', g_read, 'Ordner unsichtbar', 'rows', 'select id from public.folders', 0);
+  perform pg_temp.check('guest-read', g_read, 'Ordner-Mitglieder des eigenen Planners sichtbar', 'rows', 'select user_id from public.folder_members where folder_id = ' || FO, 2);
+  perform pg_temp.check('guest-forged', g_forged, 'keine Ordner-Mitglieder mit gefälschtem Claim', 'rows', 'select user_id from public.folder_members', 0);
   perform pg_temp.check('guest-read', g_read, 'Planner anlegen verboten', 'cannot', ins_planner_guest);
 
   -- Gast edit ---------------------------------------------------------------

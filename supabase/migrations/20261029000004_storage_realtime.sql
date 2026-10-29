@@ -1,4 +1,4 @@
--- Planner: Storage-Bucket, Storage-Policies, Realtime
+-- ys-planner: Storage-Bucket, Storage-Policies, Realtime
 
 -- ---------------------------------------------------------------------------
 -- Storage: privater Bucket knowledge-base, Pfad {planner_id}/{kb_file_id}.md

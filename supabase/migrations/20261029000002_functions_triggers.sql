@@ -1,4 +1,4 @@
--- Planner: Helper-Funktionen und Trigger
+-- ys-planner: Helper-Funktionen und Trigger
 
 -- ---------------------------------------------------------------------------
 -- JWT-Helfer
@@ -87,6 +87,16 @@ language sql stable security definer set search_path = '' as $$
         select 1 from public.planners pl
          where pl.folder_id = f and public.planner_role(pl.id) is not null
       ))
+$$;
+
+create or replace function app.guest_sees_folder(f uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select app.is_guest() and exists (
+    select 1 from public.planners pl
+     where pl.folder_id = f
+       and pl.id = (auth.jwt() ->> 'planner_id')::uuid
+       and app.guest_role(pl.id) is not null
+  )
 $$;
 
 -- Gäste sehen nur User, die Mitglied ihres Planners (direkt oder via Ordner) sind

@@ -1,4 +1,4 @@
--- Planner: Grundschema (Tabellen, Enums, Indizes, Basis-Trigger)
+-- ys-planner: Grundschema (Tabellen, Enums, Indizes, Basis-Trigger)
 
 create schema if not exists app;
 grant usage on schema app to authenticated, service_role;
