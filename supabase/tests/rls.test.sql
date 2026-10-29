@@ -107,6 +107,22 @@ insert into public.kb_files (id, planner_id, name, storage_path) values
 insert into public.task_files (id, task_id, planner_id, name, size_bytes, storage_path) values
   ('70000000-0000-4000-8000-000000000001', 'e0000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000001', 'Foto.webp', 1000, '');
 
+-- Eingang (Tasks ohne Planner)
+insert into public.tasks (id, owner_id, title) values
+  ('e1000000-0000-4000-8000-000000000003', 'a0000000-0000-4000-8000-000000000003', 'Inbox Leser'),
+  ('e1000000-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000002', 'Inbox Bearbeiter');
+insert into public.user_tags (task_id, user_id, name) values
+  ('e1000000-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000002', 'kunde-x');
+-- Bereits verschobener Inbox-Task (Trigger: Tag → Label, Datei → tasks/)
+insert into public.tasks (id, owner_id, title) values
+  ('e1000000-0000-4000-8000-000000000004', 'a0000000-0000-4000-8000-000000000002', 'Inbox verschoben');
+insert into public.user_tags (task_id, user_id, name) values
+  ('e1000000-0000-4000-8000-000000000004', 'a0000000-0000-4000-8000-000000000002', 'projekt-y');
+insert into public.task_files (task_id, name, size_bytes, storage_path) values
+  ('e1000000-0000-4000-8000-000000000004', 'scan.pdf', 10, '');
+update public.tasks set planner_id = 'c0000000-0000-4000-8000-000000000001', bucket_id = 'd0000000-0000-4000-8000-000000000001'
+ where id = 'e1000000-0000-4000-8000-000000000004';
+
 -- Share-Links: read, edit, widerrufen, abgelaufen
 insert into public.share_links (id, planner_id, token_hash, token_ciphertext, permission, revoked_at, expires_at, created_by) values
   ('90000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000001', 'h1', 'c1', 'read', null, null, 'a0000000-0000-4000-8000-000000000001'),
@@ -213,7 +229,7 @@ begin
   perform pg_temp.check('editor', editor, 'Share-Link widerrufen verboten', 'cannot', revoke_link);
 
   -- Leser -------------------------------------------------------------------
-  perform pg_temp.check('viewer', viewer, 'sieht Tasks von P', 'rows', 'select id from public.tasks where planner_id = ' || P, 1);
+  perform pg_temp.check('viewer', viewer, 'sieht Tasks von P', 'rows', 'select id from public.tasks where planner_id = ' || P, 2);
   perform pg_temp.check('viewer', viewer, 'sieht Kommentare', 'rows', 'select id from public.comments where planner_id = ' || P, 1);
   perform pg_temp.check('viewer', viewer, 'R2-Route: liest KB-Datei', 'rows', sel_obj, 1);
   perform pg_temp.check('viewer', viewer, 'sieht Task-Dateien', 'rows', sel_task_files, 1);
@@ -239,6 +255,23 @@ begin
   perform pg_temp.check('folder', fmember, 'Ordner freigeben verboten', 'cannot', ins_folder_member);
   perform pg_temp.check('folder', fmember, 'Planner löschen verboten', 'cannot', del_planner);
 
+  -- Eingang ------------------------------------------------------------------
+  perform pg_temp.check('viewer', viewer, 'Eingang: sieht eigenen Inbox-Task', 'rows', 'select id from public.tasks where planner_id is null', 1);
+  perform pg_temp.check('viewer', viewer, 'Eingang: eigenen Inbox-Task ändern', 'can', 'update public.tasks set title = ''x'' where id = ''e1000000-0000-4000-8000-000000000003''');
+  perform pg_temp.check('viewer', viewer, 'Eingang: Inbox-Task anlegen', 'can', 'insert into public.tasks (title, owner_id) values (''Neu'', ''a0000000-0000-4000-8000-000000000003'')');
+  perform pg_temp.check('viewer', viewer, 'Eingang: Verschieben ohne Bearbeiter-Rolle verboten', 'cannot', 'update public.tasks set planner_id = ' || P || ', bucket_id = ' || B1 || ' where id = ''e1000000-0000-4000-8000-000000000003''');
+  perform pg_temp.check('viewer', viewer, 'Eingang: fremde Tags unsichtbar', 'rows', 'select name from public.user_tags', 0);
+  perform pg_temp.check('editor', editor, 'Eingang: fremden Inbox-Task unsichtbar', 'rows', 'select id from public.tasks where id = ''e1000000-0000-4000-8000-000000000003''', 0);
+  perform pg_temp.check('editor', editor, 'Eingang: fremden Inbox-Task ändern verboten', 'cannot', 'update public.tasks set title = ''x'' where id = ''e1000000-0000-4000-8000-000000000003''');
+  perform pg_temp.check('editor', editor, 'Eingang: in Planner verschieben (Bearbeiter)', 'can', 'update public.tasks set planner_id = ' || P || ', bucket_id = ' || B1 || ' where id = ''e1000000-0000-4000-8000-000000000002''');
+  perform pg_temp.check('editor', editor, 'Eingang: Tag wurde beim Verschieben Label', 'rows', 'select 1 from public.task_labels tl join public.labels l on l.id = tl.label_id where tl.task_id = ''e1000000-0000-4000-8000-000000000004'' and l.name = ''projekt-y''', 1);
+  perform pg_temp.check('editor', editor, 'Eingang: Datei-Pfad nach Verschieben tasks/…', 'rows', 'select 1 from public.task_files where task_id = ''e1000000-0000-4000-8000-000000000004'' and storage_path like ''tasks/%'' and planner_id = ' || P, 1);
+  perform pg_temp.check('editor', editor, 'Eingang: Task-Datei an eigenen Inbox-Task', 'can', 'insert into public.task_files (task_id, name, size_bytes, storage_path) values (''e1000000-0000-4000-8000-000000000002'', ''a.pdf'', 1, '''')');
+  perform pg_temp.check('viewer', viewer, 'Eingang: Task-Datei an fremden Inbox-Task verboten', 'cannot', 'insert into public.task_files (task_id, name, size_bytes, storage_path) values (''e1000000-0000-4000-8000-000000000002'', ''a.pdf'', 1, '''')');
+  perform pg_temp.check('stranger', stranger, 'Eingang: keine fremden Inbox-Tasks', 'rows', 'select id from public.tasks where planner_id is null', 0);
+  perform pg_temp.check('owner', owner, 'Eingang: Owner von P sieht fremde Inbox-Tasks nicht', 'rows', 'select id from public.tasks where planner_id is null', 0);
+  perform pg_temp.check('owner', owner, 'Absender-Adresse direkt anlegen verboten (nur Server)', 'cannot', 'insert into public.user_sender_emails (user_id, email, confirmed_at) values (''a0000000-0000-4000-8000-000000000001'', ''x@y.ch'', now())');
+
   -- Fremder -----------------------------------------------------------------
   perform pg_temp.check('stranger', stranger, 'sieht keine fremden Planner', 'rows', 'select id from public.planners where id in (' || P || ',' || P2 || ')', 0);
   perform pg_temp.check('stranger', stranger, 'sieht keine Tasks', 'rows', 'select id from public.tasks where id in (' || T1 || ',' || T2 || ')', 0);
@@ -259,12 +292,14 @@ begin
 
   -- Gast read ---------------------------------------------------------------
   perform pg_temp.check('guest-read', g_read, 'sieht P', 'rows', 'select id from public.planners where id = ' || P, 1);
-  perform pg_temp.check('guest-read', g_read, 'sieht Tasks von P', 'rows', 'select id from public.tasks where planner_id = ' || P, 1);
+  perform pg_temp.check('guest-read', g_read, 'sieht Tasks von P', 'rows', 'select id from public.tasks where planner_id = ' || P, 2);
   perform pg_temp.check('guest-read', g_read, 'sieht P2 nicht', 'rows', 'select id from public.tasks where id = ' || T2, 0);
   perform pg_temp.check('guest-read', g_read, 'R2-Route: liest KB-Datei', 'rows', sel_obj, 1);
   perform pg_temp.check('guest-read', g_read, 'R2-Route: liest Task-Datei', 'rows', sel_tf_obj, 1);
   perform pg_temp.check('guest-read', g_read, 'Task-Datei anlegen verboten', 'cannot', ins_task_file);
   perform pg_temp.check('guest-edit', g_edit, 'Task-Datei anlegen', 'can', ins_task_file);
+  perform pg_temp.check('guest-edit', g_edit, 'Eingang: Inbox-Task anlegen verboten', 'cannot', 'insert into public.tasks (title, owner_id) values (''Neu'', ''a1000000-0000-4000-8000-000000000002'')');
+  perform pg_temp.check('guest-edit', g_edit, 'Eingang: keine Inbox-Tasks sichtbar', 'rows', 'select id from public.tasks where planner_id is null', 0);
   perform pg_temp.check('guest-revoked', g_revoked, 'Task-Datei anlegen verboten', 'cannot', ins_task_file);
   perform pg_temp.check('guest-read', g_read, 'sieht nur Mitglieder (owner, editor, viewer, folder)', 'rows', sel_users, 4);
   perform pg_temp.check('guest-read', g_read, 'Task anlegen verboten', 'cannot', ins_task);

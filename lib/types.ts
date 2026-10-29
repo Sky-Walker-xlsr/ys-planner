@@ -16,7 +16,7 @@ export type UserSettings = {
 
 export type Folder = { id: string; owner_id: string; name: string; position: number }
 export type FolderMember = { folder_id: string; user_id: string; role: Role }
-export type Planner = { id: string; owner_id: string; folder_id: string | null; name: string; color: string; position: number }
+export type Planner = { id: string; owner_id: string; folder_id: string | null; name: string; color: string; position: number; mail_tag: string | null }
 export type PlannerMember = { planner_id: string; user_id: string; role: Role }
 export type Favorite = { user_id: string; planner_id: string; position: number }
 
@@ -24,8 +24,12 @@ export type Bucket = { id: string; planner_id: string; name: string; position: n
 export type Label = { id: string; planner_id: string; name: string; color: string }
 export type Task = {
   id: string
-  planner_id: string
-  bucket_id: string
+  /** null = Eingang (Task gehört owner_id) */
+  planner_id: string | null
+  bucket_id: string | null
+  owner_id: string | null
+  /** Absender der Original-Mail, wenn per Mail erstellt */
+  mail_sender: string | null
   title: string
   description: string
   status: TaskStatus
@@ -67,7 +71,7 @@ export type TaskAttachment = { task_id: string; kb_file_id: string; planner_id: 
 export type TaskFile = {
   id: string
   task_id: string
-  planner_id: string
+  planner_id: string | null
   name: string
   mime_type: string
   size_bytes: number
@@ -97,3 +101,4 @@ export const ROLE_LABEL: Record<Role, string> = {
 }
 
 export const ROLE_RANK: Record<Role, number> = { owner: 3, editor: 2, viewer: 1 }
+export type UserTag = { task_id: string; user_id: string; name: string; created_at: string }

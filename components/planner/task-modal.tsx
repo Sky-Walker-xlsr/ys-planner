@@ -22,7 +22,9 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
   const t = index.get(taskId)!
   const task = t.task
   const actions = useActions()
-  const bucket = state.data.buckets[task.bucket_id]
+  const bucket = task.bucket_id ? state.data.buckets[task.bucket_id] : undefined
+  // Eingang: nur Kernfelder (kein Bucket, keine Zuweisungen/Labels/Abschnitte/Kommentare/KB)
+  const inbox = task.planner_id === null
   const editingHere = presence.filter((p) => p.taskId === taskId)
 
   useEffect(() => {
@@ -37,7 +39,7 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
   const header = (
     <div className="flex items-center gap-3 border-b border-line px-5 py-3">
       <nav className="min-w-0 flex-1 truncate text-sm text-text-2" aria-label="Pfad">
-        {state.planner?.name} / {bucket?.name}
+        {inbox ? 'Eingang' : <>{state.planner?.name} / {bucket?.name}</>}
       </nav>
       {editingHere.length > 0 && (
         <span className="hidden text-xs text-text-2 sm:inline">
@@ -60,12 +62,14 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
           <TitleField taskId={task.id} value={task.title} disabled={!canEdit} />
 
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <Field label="Bucket" id="task-bucket">
-              <select id="task-bucket" className="input" disabled={!canEdit} value={task.bucket_id}
-                onChange={(e) => void actions.updateTask(task.id, { bucket_id: e.target.value })}>
-                {sortByPosition(Object.values(state.data.buckets)).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-            </Field>
+            {!inbox && (
+              <Field label="Bucket" id="task-bucket">
+                <select id="task-bucket" className="input" disabled={!canEdit} value={task.bucket_id ?? ''}
+                  onChange={(e) => void actions.updateTask(task.id, { bucket_id: e.target.value })}>
+                  {sortByPosition(Object.values(state.data.buckets)).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </Field>
+            )}
             <Field label="Status" id="task-status">
               <select id="task-status" className="input" disabled={!canEdit} value={task.status}
                 onChange={(e) => void actions.updateTask(task.id, { status: e.target.value as TaskStatus })}>
@@ -87,15 +91,17 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
                 className={`input ${dueChipClass(task.due_date, task.status === 'done')}`}
                 onChange={(e) => void actions.updateTask(task.id, { due_date: e.target.value || null })} />
             </Field>
-            <div>
-              <span className="field-label">Zugewiesen</span>
-              <Assignees taskId={task.id} assignees={t.assignees} />
-            </div>
+            {!inbox && (
+              <div>
+                <span className="field-label">Zugewiesen</span>
+                <Assignees taskId={task.id} assignees={t.assignees} />
+              </div>
+            )}
           </div>
 
           <div className="mt-4">
-            <span className="field-label">Labels</span>
-            <Labels taskId={task.id} selected={t.labels.map((l) => l.id)} />
+            <span className="field-label">{inbox ? 'Tags' : 'Labels'}</span>
+            {inbox ? <UserTags taskId={task.id} /> : <Labels taskId={task.id} selected={t.labels.map((l) => l.id)} />}
           </div>
 
           <div className="mt-4">
@@ -103,15 +109,23 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
             <DescriptionField taskId={task.id} value={task.description} disabled={!canEdit} />
           </div>
 
-          <Sections taskId={task.id} sections={t.sections} itemsDone={t.itemsDone} itemsTotal={t.itemsTotal} />
+          {!inbox && <Sections taskId={task.id} sections={t.sections} itemsDone={t.itemsDone} itemsTotal={t.itemsTotal} />}
 
-          <Attachments taskId={task.id} onOpenFile={onOpenFile} />
+          <Attachments taskId={task.id} onOpenFile={onOpenFile} withKnowledgeBase={!inbox} />
 
           {canEdit && <DeleteTask taskId={task.id} onDeleted={onClose} />}
         </div>
 
         <aside className="flex w-full shrink-0 flex-col border-t border-line bg-bg md:w-[300px] md:rounded-br-dialog md:border-l md:border-t-0">
-          <Comments taskId={task.id} />
+          {inbox ? (
+            <div className="flex-1 p-4 text-sm">
+              <span className="field-label">Absender</span>
+              <p className="break-words">{task.mail_sender ?? '—'}</p>
+              <p className="mt-3 text-xs text-text-2">Kommentare, Zuweisungen und Abschnitte gibt es, sobald die Aufgabe in einem Planner liegt.</p>
+            </div>
+          ) : (
+            <Comments taskId={task.id} />
+          )}
           <div className="border-t border-line px-4 py-3 text-xs text-text-2">
             <div>
               Erstellt von {task.created_by ? state.users[task.created_by]?.display_name ?? 'Unbekannt' : task.created_by_guest ?? 'Gast'} ·{' '}
@@ -473,7 +487,7 @@ function ItemRow({ item }: { item: SectionItem }) {
 // ---------------------------------------------------------------------------
 // Anhänge
 // ---------------------------------------------------------------------------
-function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: string) => void }) {
+function Attachments({ taskId, onOpenFile, withKnowledgeBase }: { taskId: string; onOpenFile: (id: string) => void; withKnowledgeBase: boolean }) {
   const { state, canEdit, viewer } = usePlanner()
   const actions = useActions()
   const attached = Object.values(state.data.task_attachments).filter((a) => a.task_id === taskId)
@@ -569,7 +583,7 @@ function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: 
         <button type="button" className="btn-text" onClick={() => inputRef.current?.click()} disabled={busy > 0}>
           <Upload size={15} /> {busy > 0 ? `Lädt hoch … (${busy})` : 'Datei hochladen'}
         </button>
-        <Popover
+        {withKnowledgeBase && <Popover
           width={300}
           trigger={({ toggle }) => (
             <button type="button" className="btn-text" onClick={toggle}><Plus size={15} /> Aus Knowledge Base anhängen</button>
@@ -592,11 +606,49 @@ function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: 
               </ul>
             )
           }
-        </Popover>
+        </Popover>}
         <span className="text-xs text-text-2">Bilder werden auf Full HD verkleinert und als WebP gespeichert · max. 10 MB</span>
         </div>
       )}
     </section>
+  )
+}
+
+/** Persönliche Tags eines Inbox-Tasks; werden beim Verschieben in einen Planner zu Labels */
+function UserTags({ taskId }: { taskId: string }) {
+  const { state, db, viewer, apply, mutate } = usePlanner()
+  const tags = Object.values(state.data.user_tags).filter((t) => t.task_id === taskId).sort((a, b) => a.created_at.localeCompare(b.created_at))
+  const [draft, setDraft] = useState('')
+
+  async function add() {
+    const name = draft.trim().replace(/^#/, '').replace(/s+/g, '-').toLowerCase().slice(0, 60)
+    setDraft('')
+    if (!name || tags.some((t) => t.name === name)) return
+    const row = { task_id: taskId, user_id: viewer.id, name, created_at: new Date().toISOString() }
+    await mutate(() => apply('upsert', 'user_tags', [row]), () => db.from('user_tags').insert({ task_id: taskId, user_id: viewer.id, name }))
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {tags.map((t) => (
+        <span key={t.name} className="inline-flex items-center gap-1 rounded-full bg-bg px-2 py-0.5 text-xs font-medium">
+          #{t.name}
+          <button type="button" className="cursor-pointer text-text-2 hover:text-text" aria-label={`Tag ${t.name} entfernen`}
+            onClick={() => void mutate(() => apply('delete', 'user_tags', [t]), () => db.from('user_tags').delete().eq('task_id', taskId).eq('name', t.name))}>
+            <X size={12} />
+          </button>
+        </span>
+      ))}
+      <input
+        className="input h-7 w-32"
+        placeholder="+ Tag"
+        aria-label="Tag hinzufügen"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void add() } }}
+        onBlur={() => { if (draft.trim()) void add() }}
+      />
+    </div>
   )
 }
 

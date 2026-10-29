@@ -19,4 +19,6 @@ export const serverEnv = {
   get cronSecret() { return required('CRON_SECRET') },
   get resendApiKey() { return required('RESEND_API_KEY') },
   get mailFrom() { return required('MAIL_FROM') },
+  /** Domain der Mail-an-Planner-Adressen ({zufall}@INBOX_DOMAIN) */
+  get inboxDomain() { return required('INBOX_DOMAIN').toLowerCase() },
 }

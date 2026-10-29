@@ -47,6 +47,7 @@ npm run dev                  # http://localhost:3040
 | `npm run typecheck` / `npm run lint` | Prüfungen |
 | `npm run gen:signing-key` | Neuen ES256-JWK für Supabase erzeugen |
 | `npm run test:rls` | RLS-Tests gegen `DATABASE_URL` |
+| `npm test` | Worker-Tests (Mail an Planner, Vitest) |
 | `npm run preview` | Lokal als Cloudflare Worker (wrangler dev) |
 | `npm run deploy` | Build + Deploy auf Cloudflare |
 
@@ -97,6 +98,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 | `…0005_task_files.sql` | Datei-Uploads an Tasks (`task_files`, damals Bucket `task-files`) |
 | `…0006_r2_paths.sql` | Trigger setzen R2-Schlüssel (`kb/…`, `tasks/…`); Mail-Anhänge bis 25 MB |
 | `…0007_drop_supabase_storage.sql` | Erst **nach** der Storage-Migration: strenge Pfad-Checks, Supabase-Storage-Policies entfernen |
+| `…0008_mail_inbox.sql` | Eingang (`tasks.planner_id`/`bucket_id` nullable, `owner_id`, `mail_sender`), `user_tags`, `user_sender_emails`, `planners.mail_tag`, `user_settings.inbox_local`, Verschiebe-Trigger (Tags → Labels) |
 
 ### RLS-Tests
 
@@ -154,6 +156,27 @@ Einmalig, für Dateien aus der Zeit vor R2:
    ```
 4. Migration `…0007_drop_supabase_storage.sql` anwenden (Pfad-Checks, Storage-Policies weg).
 5. **Erst dann** die Supabase-Buckets löschen: Dashboard → *Storage* → `knowledge-base` und `task-files` → *Delete bucket*. Supabase erlaubt das Löschen nicht per SQL.
+
+---
+
+## Mail an Planner (Cloudflare Email Routing)
+
+Jeder User hat genau eine zufällige Adresse `{zufall}@salm.li` (`user_settings.inbox_local`, Domain über `INBOX_DOMAIN`). Er sieht sie in den Einstellungen unter «Mail an Planner» und kann sie neu generieren, die alte gilt dann sofort nicht mehr. Plus-Adressen gibt es nicht.
+
+**Ablauf:** Email Routing (Catch-all) → `worker.ts › email()` → interne Route `POST /api/inbound` (geschützt mit `CRON_SECRET`) → `lib/inbound/process.ts`. Lehnt die Route ab, ruft der Worker `message.setReject(…)` auf.
+
+- **Absender:** Erlaubt sind nur die Zitadel-Mail des Users und bestätigte Adressen aus `user_sender_emails`. Bestätigt wird über einen Link per Resend, gültig 24 h. Zusätzlich muss im obersten `Authentication-Results`-Header DKIM oder SPF für die Domain des Absenders `pass` sein. Alles andere wird abgelehnt.
+- **Betreff:** `#dringend`, `#wichtig`, `#mittel` und `#niedrig` setzen die Priorität. `#tag` passend zum Mail-Tag eines Planners legt den Task in dessen ersten Bucket (dafür ist die Rolle Bearbeiter nötig). Kommt ein Tag mehrfach vor, gewinnt der eigene Planner, sonst landet der Task im Eingang, mit Hinweis in der Bestätigungsmail. Übrige Tags werden im Planner zu Labels, im Eingang zu persönlichen Tags. `Fwd:`, `FW:`, `WG:`, `AW:` und `Re:` werden entfernt. Ist der Betreff leer, heisst der Task «(Ohne Betreff)».
+- **Inhalt:** Die Beschreibung ist der Text-Teil der Mail, ersatzweise das HTML als Markdown. Anhänge landen in R2 (`task_files`), insgesamt bis 25 MB, alles darüber wird übersprungen. Inline-Bilder unter 10 KB (Signaturen) werden ignoriert. Der Absender wird in `tasks.mail_sender` gespeichert.
+- **Eingang** (`/eingang`): Tasks ohne Planner, nur für ihren Owner sichtbar (RLS). Verschieben geht per Dialog oder per Drag & Drop auf einen Planner in der Seitenleiste. Dabei werden die Tags zu Labels (Trigger `tg_tasks_after_move`), die Dateien wandern von `inbox/…` nach `tasks/…`.
+- **Tests:** `npm test` (Vitest, `lib/inbound/process.test.ts`).
+
+### Einrichten
+
+1. Zone `salm.li` muss in Cloudflare aktiv sein, im Account «Yannick Dev» wie der Worker.
+2. Dashboard → `salm.li` → *Email* → *Email Routing* → aktivieren. Cloudflare legt dabei MX- und SPF-Einträge an. **Achtung:** Danach geht jede Mail an `@salm.li` über Cloudflare. Bestehende Postfächer auf `salm.li` funktionieren nicht mehr.
+3. *Routing rules* → *Catch-all address* → Aktion **Send to a Worker** → `ys-planner` → aktivieren.
+4. Testen: Eine Mail von deiner Login-Adresse an die Adresse aus den Einstellungen schicken.
 
 ---
 
@@ -228,11 +251,12 @@ Siehe `.env.example`.
 | `APP_URL` | var | Öffentliche Basis-URL |
 | `SESSION_SECRET` | secret | Signiert Session- und Gast-Cookies |
 | `SHARE_LINK_SECRET` | secret | Verschlüsselt Share-Link-Tokens (zum erneuten Kopieren) |
-| `CRON_SECRET` | secret | Schützt `/api/cron/due` |
+| `CRON_SECRET` | secret | Schützt `/api/cron/due` und `/api/inbound` (interne Worker-Aufrufe) |
 | `ZITADEL_ISSUER`, `ZITADEL_CLIENT_ID` | var | OIDC |
 | `ZITADEL_CLIENT_SECRET` | secret | nur ohne PKCE |
 | `RESEND_API_KEY` | secret | Resend |
 | `MAIL_FROM` | var | Absender |
+| `INBOX_DOMAIN` | var | Domain der Mail-an-Planner-Adressen (`salm.li`) |
 | `DATABASE_URL` | lokal | nur für `npm run test:rls` |
 
 ---

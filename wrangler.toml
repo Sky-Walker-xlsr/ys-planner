@@ -34,7 +34,9 @@ NEXT_PUBLIC_SUPABASE_URL = "https://sqeundlhrhlepfssroad.supabase.co"
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_mXtHzeKjuc5TPGlQp_jr0w_lsTV_142"
 ZITADEL_ISSUER = "https://auth.yannicksalm.ch"
 ZITADEL_CLIENT_ID = "397241212362359554"
-MAIL_FROM = "ys-planner <planner@yannicksalm.ch>"
+MAIL_FROM = "ys-planner <no-reply@salm.li>"
+# Mail an Planner: {zufall}@INBOX_DOMAIN (Cloudflare Email Routing, Catch-all → dieser Worker)
+INBOX_DOMAIN = "salm.li"
 
 # Secrets (nicht hier eintragen!):
 #   wrangler secret put SUPABASE_SECRET_KEY

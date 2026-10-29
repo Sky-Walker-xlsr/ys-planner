@@ -12,17 +12,19 @@ export type SidebarData = {
   plannerMembers: PlannerMember[]
   favorites: Favorite[]
   myTaskCount: number
+  /** offene Tasks im Eingang */
+  inboxCount: number
 }
 
 export function useSidebarData(userId: string) {
   const db = getBrowserClient()
   const [data, setData] = useState<SidebarData>({
-    loaded: false, folders: [], folderMembers: [], planners: [], plannerMembers: [], favorites: [], myTaskCount: 0,
+    loaded: false, folders: [], folderMembers: [], planners: [], plannerMembers: [], favorites: [], myTaskCount: 0, inboxCount: 0,
   })
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async () => {
-    const [folders, folderMembers, planners, plannerMembers, favorites, count] = await Promise.all([
+    const [folders, folderMembers, planners, plannerMembers, favorites, count, inbox] = await Promise.all([
       db.from('folders').select('*').order('position'),
       db.from('folder_members').select('*'),
       db.from('planners').select('*').order('position'),
@@ -33,6 +35,12 @@ export function useSidebarData(userId: string) {
         .select('task_id, tasks!inner(status)', { count: 'exact', head: true })
         .eq('user_id', userId)
         .neq('tasks.status', 'done'),
+      db
+        .from('tasks')
+        .select('id', { count: 'exact', head: true })
+        .is('planner_id', null)
+        .eq('owner_id', userId)
+        .neq('status', 'done'),
     ])
     setData({
       loaded: true,
@@ -42,6 +50,7 @@ export function useSidebarData(userId: string) {
       plannerMembers: (plannerMembers.data ?? []) as PlannerMember[],
       favorites: (favorites.data ?? []) as Favorite[],
       myTaskCount: count.count ?? 0,
+      inboxCount: inbox.count ?? 0,
     })
   }, [db, userId])
 

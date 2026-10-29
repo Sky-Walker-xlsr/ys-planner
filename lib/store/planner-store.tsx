@@ -5,7 +5,7 @@ import { getBrowserClient } from '@/lib/supabase/browser'
 import { toast } from '@/components/ui/toast'
 import type {
   Bucket, Comment, Folder, FolderMember, KbFile, Label, Planner, PlannerMember, Role,
-  SectionItem, Task, TaskAssignee, TaskAttachment, TaskFile, TaskLabel, TaskSection, User,
+  SectionItem, Task, TaskAssignee, TaskAttachment, TaskFile, TaskLabel, TaskSection, User, UserTag,
 } from '@/lib/types'
 import { ROLE_RANK } from '@/lib/types'
 
@@ -24,6 +24,7 @@ type Rows = {
   kb_files: KbFile
   task_attachments: TaskAttachment
   task_files: TaskFile
+  user_tags: UserTag
   planner_members: PlannerMember
   folder_members: FolderMember
 }
@@ -41,6 +42,7 @@ const KEYS: { [T in TableName]: (r: Rows[T]) => string } = {
   kb_files: (r) => r.id,
   task_attachments: (r) => `${r.task_id}:${r.kb_file_id}`,
   task_files: (r) => r.id,
+  user_tags: (r) => `${r.task_id}:${r.name}`,
   planner_members: (r) => `${r.planner_id}:${r.user_id}`,
   folder_members: (r) => `${r.folder_id}:${r.user_id}`,
 }
@@ -136,15 +138,20 @@ export function usePlanner() {
   return ctx
 }
 
+/**
+ * plannerId = null: Eingang des eingeloggten Users (Tasks ohne Planner, nur eigene). Gleiche API,
+ * damit Task-Popup und Aktionen wiederverwendet werden können.
+ */
 export function PlannerProvider({
   plannerId,
   viewer,
   children,
 }: {
-  plannerId: string
+  plannerId: string | null
   viewer: Viewer
   children: React.ReactNode
 }) {
+  const inbox = plannerId === null
   const db = useMemo(() => getBrowserClient(viewer.kind === 'guest' ? viewer.linkId : 'user'), [viewer])
   const [state, dispatch] = useReducer(reducer, {
     loaded: false,
@@ -173,7 +180,26 @@ export function PlannerProvider({
     [db],
   )
 
+  const reloadInbox = useCallback(async () => {
+    const { data: tasks } = await db.from('tasks').select('*').is('planner_id', null).eq('owner_id', viewer.id)
+    const ids = (tasks ?? []).map((t) => t.id as string)
+    const [{ data: files }, { data: tags }, { data: me }] = await Promise.all([
+      ids.length ? db.from('task_files').select('*').in('task_id', ids) : Promise.resolve({ data: [] }),
+      db.from('user_tags').select('*').eq('user_id', viewer.id),
+      db.from('users').select('id, email, display_name, avatar_color').eq('id', viewer.id),
+    ])
+    const data = emptyCollections()
+    for (const t of (tasks ?? []) as Task[]) data.tasks[t.id] = t
+    for (const f of (files ?? []) as TaskFile[]) data.task_files[f.id] = f
+    for (const t of (tags ?? []) as UserTag[]) data.user_tags[KEYS.user_tags(t)] = t
+    const users: Record<string, User> = {}
+    for (const u of (me ?? []) as User[]) users[u.id] = u
+    setRole('owner')
+    dispatch({ type: 'load', planner: null, folder: null, users, data })
+  }, [db, viewer.id])
+
   const reload = useCallback(async () => {
+    if (plannerId === null) return reloadInbox()
     const { data: planner, error } = await db.from('planners').select('*').eq('id', plannerId).maybeSingle<Planner>()
     if (error || !planner) {
       dispatch({ type: 'load', planner: null, folder: null, users: {}, data: emptyCollections() })
@@ -214,14 +240,49 @@ export function PlannerProvider({
     const { data: r } = await db.rpc('planner_role', { p: plannerId })
     setRole((r as Role | null) ?? null)
     dispatch({ type: 'load', planner, folder, users, data })
-  }, [db, plannerId])
+  }, [db, plannerId, reloadInbox])
 
   useEffect(() => {
     void reload()
   }, [reload])
 
+  // Postgres Changes im Eingang: eigene Tasks und Tags; verschobene Tasks verschwinden
+  useEffect(() => {
+    if (!inbox) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const channel = db.channel(`db:inbox:${viewer.id}`)
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `owner_id=eq.${viewer.id}` }, (p) => {
+      const row = p.new as Task
+      if (p.eventType === 'DELETE') {
+        if (stateRef.current.data.tasks[(p.old as Task).id]) dispatch({ type: 'delete', table: 'tasks', rows: [p.old] })
+      } else if (row.planner_id) {
+        dispatch({ type: 'delete', table: 'tasks', rows: [row] })
+      } else {
+        dispatch({ type: 'upsert', table: 'tasks', rows: [row] })
+        // Mail-Tasks: Anhänge und Tags werden kurz nach dem Task gespeichert
+        if (p.eventType === 'INSERT') {
+          if (timer) clearTimeout(timer)
+          timer = setTimeout(() => void reloadInbox(), 2000)
+        }
+      }
+    })
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: 'user_tags', filter: `user_id=eq.${viewer.id}` }, (p) => {
+      if (p.eventType === 'DELETE') dispatch({ type: 'delete', table: 'user_tags', rows: [p.old] })
+      else dispatch({ type: 'upsert', table: 'user_tags', rows: [p.new] })
+    })
+    channel.on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'task_files' }, (p) => {
+      if (stateRef.current.data.task_files[(p.old as TaskFile).id]) dispatch({ type: 'delete', table: 'task_files', rows: [p.old] })
+    })
+    channel.subscribe()
+    return () => {
+      if (timer) clearTimeout(timer)
+      void db.removeChannel(channel)
+    }
+  }, [db, inbox, viewer.id, reloadInbox])
+
   // Postgres Changes
   useEffect(() => {
+    if (plannerId === null) return
     const channel = db.channel(`db:planner:${plannerId}`)
     for (const table of PLANNER_TABLES) {
       channel.on(
@@ -271,12 +332,13 @@ export function PlannerProvider({
   }, [state.data.planner_members, state.data.folder_members, state.data.comments, fetchUsers])
 
   useEffect(() => {
-    if (!state.loaded) return
+    if (!state.loaded || plannerId === null) return
     void db.rpc('planner_role', { p: plannerId }).then(({ data }) => setRole((data as Role | null) ?? null))
   }, [db, plannerId, state.loaded, state.data.planner_members, state.data.folder_members])
 
   // Presence + Broadcast (privater Channel, RLS auf realtime.messages)
   useEffect(() => {
+    if (plannerId === null) return
     const channel = db.channel(`planner:${plannerId}`, {
       config: { private: true, presence: { key: `${viewer.kind}:${viewer.id}` } },
     })

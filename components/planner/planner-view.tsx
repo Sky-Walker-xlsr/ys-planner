@@ -19,6 +19,7 @@ import { Charts } from './charts'
 import { KnowledgeBase } from './knowledge-base'
 import { TaskModal } from './task-modal'
 import { request } from '@/lib/file-urls'
+import { PlannerSettingsDialog } from './planner-settings'
 import { ShareDialog } from './share-dialog'
 
 const TABS = [
@@ -194,7 +195,7 @@ function PlannerMenu() {
   const { state, db, viewer } = usePlanner()
   const router = useRouter()
   const planner = state.planner!
-  const [dialog, setDialog] = useState<'rename' | 'move' | 'delete' | null>(null)
+  const [dialog, setDialog] = useState<'rename' | 'move' | 'settings' | 'delete' | null>(null)
   const [name, setName] = useState(planner.name)
   const [folders, setFolders] = useState<Folder[]>([])
   const [target, setTarget] = useState(planner.folder_id ?? '')
@@ -237,6 +238,7 @@ function PlannerMenu() {
           <>
             <MenuItem onClick={() => { close(); setName(planner.name); setDialog('rename') }}>Umbenennen</MenuItem>
             <MenuItem onClick={() => { close(); void openMove() }}>Verschieben</MenuItem>
+            <MenuItem onClick={() => { close(); setDialog('settings') }}>Einstellungen</MenuItem>
             <MenuItem danger onClick={() => { close(); setDialog('delete') }}>Planner löschen</MenuItem>
           </>
         )}
@@ -270,6 +272,8 @@ function PlannerMenu() {
           </div>
         </form>
       </Modal>
+
+      {dialog === 'settings' && <PlannerSettingsDialog open onClose={() => setDialog(null)} />}
 
       <Modal open={dialog === 'delete'} onClose={() => setDialog(null)} title="Planner löschen?" maxWidth={420}>
         <p className="text-sm text-text-2">

@@ -14,6 +14,8 @@ export type MailContent = {
   /** Optionale Liste (Klartext) */
   items?: { title: string; meta?: string; href?: string }[]
   cta?: { label: string; href: string }
+  /** Fusszeile; Standard: Hinweis auf aktivierte Benachrichtigungen */
+  footer?: string
 }
 
 /** Schlichtes HTML-Template im App-Design (Inter, Akzent #1F7A57) */
@@ -44,7 +46,7 @@ export function renderMail(c: MailContent): string {
         ${cta}
       </td></tr>
     </table>
-    <p style="color:#5F6670;font-size:12px;margin-top:16px">Du erhältst diese Mail, weil Benachrichtigungen in deinen ys-planner-Einstellungen aktiviert sind.</p>
+    <p style="color:#5F6670;font-size:12px;margin-top:16px">${escapeHtml(c.footer ?? 'Du erhältst diese Mail, weil Benachrichtigungen in deinen ys-planner-Einstellungen aktiviert sind.')}</p>
   </td></tr></table></body></html>`
 }
 

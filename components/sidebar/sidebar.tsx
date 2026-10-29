@@ -6,7 +6,7 @@ import {
   DndContext, PointerSensor, KeyboardSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent,
 } from '@dnd-kit/core'
 import {
-  CheckSquare, ChevronDown, ChevronRight, Folder as FolderIcon, LayoutGrid, MoreHorizontal, Plus, Search, Settings, Star,
+  CheckSquare, ChevronDown, ChevronRight, Folder as FolderIcon, Inbox, LayoutGrid, MoreHorizontal, Plus, Search, Settings, Star,
 } from 'lucide-react'
 import { useCurrentUser } from '@/components/app/current-user'
 import { Avatar, PlannerIcon } from '@/components/ui/avatar'
@@ -57,6 +57,21 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const plannerById = useMemo(() => new Map(data.planners.map((p) => [p.id, p])), [data.planners])
   const favorites = data.favorites.map((f) => plannerById.get(f.planner_id)).filter(Boolean) as Planner[]
 
+  // Eingang-Einträge per Drag & Drop auf einen Planner (Rolle ≥ editor) → erster Bucket
+  async function moveInboxTask(taskId: string, planner: Planner) {
+    const res = await fetch(`/api/tasks/${taskId}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plannerId: planner.id }),
+    })
+    const body = (await res.json().catch(() => ({}))) as { error?: string }
+    toast(res.ok ? `In «${planner.name}» verschoben` : body.error ?? 'Verschieben fehlgeschlagen')
+  }
+  const inboxDrop = (p: Planner) => {
+    const role = roles.plannerRole.get(p.id)
+    return role === 'owner' || role === 'editor' ? (taskId: string) => void moveInboxTask(taskId, p) : undefined
+  }
+
   async function onDragEnd(e: DragEndEvent) {
     const plannerId = String(e.active.id)
     const target = e.over ? String(e.over.id) : null
@@ -105,11 +120,24 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
               <span className="rounded-full bg-bg px-1.5 text-xs font-medium text-text-2 border border-line">{data.myTaskCount}</span>
             )}
           </Link>
+          <Link
+            href="/eingang"
+            onClick={onNavigate}
+            className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
+              pathname === '/eingang' ? 'bg-accent-soft text-accent-soft-text font-medium' : 'hover:bg-bg'
+            }`}
+          >
+            <Inbox size={16} className="shrink-0" />
+            <span className="flex-1">Eingang</span>
+            {data.inboxCount > 0 && (
+              <span className="rounded-full bg-bg px-1.5 text-xs font-medium text-text-2 border border-line">{data.inboxCount}</span>
+            )}
+          </Link>
 
           {favorites.length > 0 && (
             <Section title="Favoriten" icon={<Star size={12} />}>
               {favorites.map((p) => (
-                <PlannerRow key={`fav-${p.id}`} planner={p} active={p.id === activeId} onNavigate={onNavigate} />
+                <PlannerRow key={`fav-${p.id}`} planner={p} active={p.id === activeId} onNavigate={onNavigate} onInboxDrop={inboxDrop(p)} />
               ))}
             </Section>
           )}
@@ -167,7 +195,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                       {list.length === 0 && <p className="px-2 py-1 text-xs text-text-2">Leer</p>}
                       {list.map((p) => (
                         <DraggablePlanner key={p.id} planner={p} enabled={roles.plannerRole.get(p.id) === 'owner'}>
-                          <PlannerRow planner={p} active={p.id === activeId} onNavigate={onNavigate} />
+                          <PlannerRow planner={p} active={p.id === activeId} onNavigate={onNavigate} onInboxDrop={inboxDrop(p)} />
                         </DraggablePlanner>
                       ))}
                     </div>
@@ -182,7 +210,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             <Section title="Ohne Ordner">
               {(plannersByFolder.get(NO_FOLDER) ?? []).map((p) => (
                 <DraggablePlanner key={p.id} planner={p} enabled={roles.plannerRole.get(p.id) === 'owner'}>
-                  <PlannerRow planner={p} active={p.id === activeId} onNavigate={onNavigate} />
+                  <PlannerRow planner={p} active={p.id === activeId} onNavigate={onNavigate} onInboxDrop={inboxDrop(p)} />
                 </DraggablePlanner>
               ))}
               {data.loaded && !(plannersByFolder.get(NO_FOLDER) ?? []).length && (
@@ -265,15 +293,36 @@ function Section({
   )
 }
 
-function PlannerRow({ planner, active, onNavigate }: { planner: Planner; active: boolean; onNavigate?: () => void }) {
+export const INBOX_DRAG_TYPE = 'application/x-ys-inbox-task'
+
+function PlannerRow({
+  planner,
+  active,
+  onNavigate,
+  onInboxDrop,
+}: {
+  planner: Planner
+  active: boolean
+  onNavigate?: () => void
+  /** Ablegen eines Eingang-Eintrags (natives Drag & Drop von der Eingang-Seite) */
+  onInboxDrop?: (taskId: string) => void
+}) {
+  const [over, setOver] = useState(false)
   return (
     <Link
       href={`/p/${planner.id}`}
       onClick={onNavigate}
       aria-current={active ? 'page' : undefined}
+      onDragOver={onInboxDrop ? (e) => { if (e.dataTransfer.types.includes(INBOX_DRAG_TYPE)) { e.preventDefault(); setOver(true) } } : undefined}
+      onDragLeave={() => setOver(false)}
+      onDrop={onInboxDrop ? (e) => {
+        const id = e.dataTransfer.getData(INBOX_DRAG_TYPE)
+        setOver(false)
+        if (id) { e.preventDefault(); onInboxDrop(id) }
+      } : undefined}
       className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
         active ? 'bg-accent-soft text-accent-soft-text font-medium' : 'hover:bg-bg'
-      }`}
+      } ${over ? 'ring-2 ring-accent' : ''}`}
     >
       <PlannerIcon name={planner.name} color={planner.color} />
       <span className="truncate">{planner.name}</span>
@@ -308,7 +357,7 @@ function FolderDrop({ id, children }: { id: string; children: React.ReactNode })
 function SidebarSearch({ planners, onNavigate }: { planners: Planner[]; onNavigate?: () => void }) {
   const router = useRouter()
   const [q, setQ] = useState('')
-  const [tasks, setTasks] = useState<{ id: string; title: string; planner_id: string }[]>([])
+  const [tasks, setTasks] = useState<{ id: string; title: string; planner_id: string | null }[]>([])
   const [open, setOpen] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const plannerMatches = q.trim() ? planners.filter((p) => p.name.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 5) : []
@@ -364,9 +413,9 @@ function SidebarSearch({ planners, onNavigate }: { planners: Planner[]; onNaviga
           ))}
           {tasks.length > 0 && <div className="px-2 pt-2 pb-1 text-xs font-semibold text-text-2">Aufgaben</div>}
           {tasks.map((t) => (
-            <button key={t.id} type="button" onMouseDown={() => go(`/p/${t.planner_id}?task=${t.id}`)} className="flex w-full flex-col rounded-md px-2 py-1.5 text-left hover:bg-bg cursor-pointer">
+            <button key={t.id} type="button" onMouseDown={() => go(t.planner_id ? `/p/${t.planner_id}?task=${t.id}` : `/eingang?task=${t.id}`)} className="flex w-full flex-col rounded-md px-2 py-1.5 text-left hover:bg-bg cursor-pointer">
               <span className="truncate text-sm">{t.title}</span>
-              <span className="truncate text-xs text-text-2">{plannerName.get(t.planner_id)}</span>
+              <span className="truncate text-xs text-text-2">{t.planner_id ? plannerName.get(t.planner_id) : 'Eingang'}</span>
             </button>
           ))}
         </div>

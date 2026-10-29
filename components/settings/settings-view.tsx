@@ -6,6 +6,7 @@ import { Checkbox, Switch } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
 import { getBrowserClient } from '@/lib/supabase/browser'
 import type { UserSettings } from '@/lib/types'
+import { MailInboxCard } from './mail-inbox-card'
 
 export function SettingsView() {
   const me = useCurrentUser()
@@ -71,6 +72,8 @@ export function SettingsView() {
             <button type="submit" className="btn-secondary">Abmelden</button>
           </form>
         </section>
+
+        <MailInboxCard />
 
         <section className="card p-5" aria-labelledby="theme-title">
           <h2 id="theme-title" className="mb-4 text-sm font-semibold">Darstellung</h2>

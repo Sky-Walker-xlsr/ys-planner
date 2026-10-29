@@ -52,6 +52,8 @@ export function useActions() {
           start_date: null,
           due_date: input.dueDate ?? null,
           position,
+          owner_id: null,
+          mail_sender: null,
           created_by: viewer.kind === 'user' ? viewer.id : null,
           created_by_guest: viewer.kind === 'guest' ? viewer.name : null,
           completed_at: null,
