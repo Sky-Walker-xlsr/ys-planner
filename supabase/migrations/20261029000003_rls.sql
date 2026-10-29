@@ -25,6 +25,8 @@ alter table public.activity_log enable row level security;
 revoke all on all tables in schema public from anon;
 grant select, insert, update, delete on all tables in schema public to authenticated;
 grant usage on all sequences in schema public to authenticated;
+-- Supabase-Default-Privilegien vergeben auch TRUNCATE (umgeht RLS), REFERENCES und TRIGGER
+revoke truncate, references, trigger on all tables in schema public from authenticated;
 
 -- ---------------------------------------------------------------------------
 -- users: Eingeloggte sehen alle (Einladen per Suche), Gäste nur Planner-Mitglieder.
@@ -133,13 +135,13 @@ create policy comments_insert on public.comments for insert to authenticated
 create policy comments_update on public.comments for update to authenticated
   using (
     app.has_role(planner_id, 'editor')
-    and (author_user_id = app.uid() or (app.is_guest() and guest_id = auth.uid()))
+    and (author_user_id = (select app.uid()) or ((select app.is_guest()) and guest_id = (select auth.uid())))
   )
   with check (app.has_role(planner_id, 'editor'));
 create policy comments_delete on public.comments for delete to authenticated
   using (
     app.has_role(planner_id, 'editor')
-    and (author_user_id = app.uid() or (app.is_guest() and guest_id = auth.uid()))
+    and (author_user_id = (select app.uid()) or ((select app.is_guest()) and guest_id = (select auth.uid())))
   );
 
 -- ---------------------------------------------------------------------------
