@@ -64,6 +64,18 @@ export type KbFile = {
   updated_at: string
 }
 export type TaskAttachment = { task_id: string; kb_file_id: string; planner_id: string }
+export type TaskFile = {
+  id: string
+  task_id: string
+  planner_id: string
+  name: string
+  mime_type: string
+  size_bytes: number
+  storage_path: string
+  uploaded_by: string | null
+  uploaded_by_guest: string | null
+  created_at: string
+}
 
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   not_started: 'Nicht begonnen',

@@ -5,7 +5,7 @@ import { getBrowserClient } from '@/lib/supabase/browser'
 import { toast } from '@/components/ui/toast'
 import type {
   Bucket, Comment, Folder, FolderMember, KbFile, Label, Planner, PlannerMember, Role,
-  SectionItem, Task, TaskAssignee, TaskAttachment, TaskLabel, TaskSection, User,
+  SectionItem, Task, TaskAssignee, TaskAttachment, TaskFile, TaskLabel, TaskSection, User,
 } from '@/lib/types'
 import { ROLE_RANK } from '@/lib/types'
 
@@ -23,6 +23,7 @@ type Rows = {
   comments: Comment
   kb_files: KbFile
   task_attachments: TaskAttachment
+  task_files: TaskFile
   planner_members: PlannerMember
   folder_members: FolderMember
 }
@@ -39,13 +40,14 @@ const KEYS: { [T in TableName]: (r: Rows[T]) => string } = {
   comments: (r) => r.id,
   kb_files: (r) => r.id,
   task_attachments: (r) => `${r.task_id}:${r.kb_file_id}`,
+  task_files: (r) => r.id,
   planner_members: (r) => `${r.planner_id}:${r.user_id}`,
   folder_members: (r) => `${r.folder_id}:${r.user_id}`,
 }
 
 const PLANNER_TABLES: TableName[] = [
   'buckets', 'labels', 'tasks', 'task_assignees', 'task_labels', 'task_sections',
-  'section_items', 'comments', 'kb_files', 'task_attachments', 'planner_members',
+  'section_items', 'comments', 'kb_files', 'task_attachments', 'task_files', 'planner_members',
 ]
 
 type Collections = { [T in TableName]: Record<string, Rows[T]> }
@@ -416,7 +418,7 @@ export type TaskDerived = {
   itemsTotal: number
   itemsDone: number
   commentCount: number
-  attachments: KbFile[]
+  attachments: (KbFile | TaskFile)[]
 }
 
 export function useTaskIndex() {
@@ -453,6 +455,7 @@ export function useTaskIndex() {
       const f = d.kb_files[at.kb_file_id]
       if (f) byTask.get(at.task_id)?.attachments.push(f)
     }
+    for (const f of Object.values(d.task_files)) byTask.get(f.task_id)?.attachments.push(f)
     for (const t of byTask.values()) t.sections = sortByPosition(t.sections)
     return byTask
   }, [state.data])

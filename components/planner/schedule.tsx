@@ -1,15 +1,11 @@
 'use client'
-import { useMemo, useState } from 'react'
-import { DndContext, PointerSensor, KeyboardSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useMemo } from 'react'
+import { DndContext, PointerSensor, KeyboardSensor, useDraggable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { usePlanner, type TaskDerived } from '@/lib/store/planner-store'
-import { Segmented, PrioritySquare } from '@/components/ui/controls'
-import { addDays, isOverdue, parseISODate, startOfWeekISO, todayISO, toISODate } from '@/lib/dates'
+import { PrioritySquare } from '@/components/ui/controls'
+import { CalendarGrid, CalendarHeader, useCalendar } from '@/components/ui/calendar'
+import { isOverdue } from '@/lib/dates'
 import { useActions } from './use-actions'
-
-const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
-const monthFmt = new Intl.DateTimeFormat('de-CH', { month: 'long', year: 'numeric' })
-const dayFmt = new Intl.DateTimeFormat('de-CH', { weekday: 'short', day: 'numeric', month: 'short' })
 
 type Entry =
   | { kind: 'task'; id: string; date: string; t: TaskDerived }
@@ -18,23 +14,7 @@ type Entry =
 export function Schedule({ tasks, onOpenTask }: { tasks: TaskDerived[]; onOpenTask: (id: string) => void }) {
   const { state, canEdit } = usePlanner()
   const actions = useActions()
-  const [mode, setMode] = useState<'month' | 'week'>('month')
-  const [anchor, setAnchor] = useState(todayISO())
-  const today = todayISO()
-
-  const days = useMemo(() => {
-    if (mode === 'week') {
-      const start = startOfWeekISO(anchor)
-      return Array.from({ length: 7 }, (_, i) => addDays(start, i))
-    }
-    const a = parseISODate(anchor)
-    const first = toISODate(new Date(a.getFullYear(), a.getMonth(), 1))
-    const start = startOfWeekISO(first)
-    const last = toISODate(new Date(a.getFullYear(), a.getMonth() + 1, 0))
-    const out: string[] = []
-    for (let d = start; d <= last || out.length % 7 !== 0; d = addDays(d, 1)) out.push(d)
-    return out
-  }, [mode, anchor])
+  const cal = useCalendar()
 
   const byDay = useMemo(() => {
     const map = new Map<string, Entry[]>()
@@ -63,76 +43,19 @@ export function Schedule({ tasks, onOpenTask }: { tasks: TaskDerived[]; onOpenTa
     else await actions.updateSection(id, { due_date: date })
   }
 
-  function shift(dir: 1 | -1) {
-    if (mode === 'week') setAnchor(addDays(anchor, 7 * dir))
-    else {
-      const a = parseISODate(anchor)
-      setAnchor(toISODate(new Date(a.getFullYear(), a.getMonth() + dir, 1)))
-    }
-  }
-
-  const title = mode === 'month' ? monthFmt.format(parseISODate(anchor)) : `${dayFmt.format(parseISODate(days[0]))} – ${dayFmt.format(parseISODate(days[6]))}`
-  const currentMonth = parseISODate(anchor).getMonth()
-
   return (
     <div className="flex h-full flex-col p-5">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <button type="button" className="btn-secondary" onClick={() => setAnchor(today)}>Heute</button>
-        <button type="button" className="btn-icon" aria-label="Zurück" onClick={() => shift(-1)}><ChevronLeft size={18} /></button>
-        <button type="button" className="btn-icon" aria-label="Weiter" onClick={() => shift(1)}><ChevronRight size={18} /></button>
-        <h2 className="text-base font-semibold capitalize">{title}</h2>
-        <div className="ml-auto">
-          <Segmented label="Zeitraum" value={mode} onChange={setMode} options={[{ value: 'month', label: 'Monat' }, { value: 'week', label: 'Woche' }]} />
-        </div>
-      </div>
+      <CalendarHeader cal={cal} />
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-        <div className="card grid flex-1 grid-cols-7 overflow-hidden" style={{ gridAutoRows: mode === 'week' ? '1fr' : 'minmax(110px, 1fr)' }}>
-          {WEEKDAYS.map((d) => (
-            <div key={d} className="border-b border-line bg-bg px-2 py-1 text-xs font-medium text-text-2">{d}</div>
-          ))}
-          {days.map((d) => (
-            <Day
-              key={d}
-              date={d}
-              isToday={d === today}
-              muted={mode === 'month' && parseISODate(d).getMonth() !== currentMonth}
-              entries={byDay.get(d) ?? []}
-              canEdit={canEdit}
-              onOpenTask={onOpenTask}
-            />
-          ))}
-        </div>
+        <CalendarGrid
+          cal={cal}
+          renderDay={(d) =>
+            (byDay.get(d) ?? []).map((e) => (
+              <EntryChip key={`${e.kind}:${e.id}`} entry={e} canEdit={canEdit} onOpen={() => onOpenTask(e.t.task.id)} />
+            ))
+          }
+        />
       </DndContext>
-    </div>
-  )
-}
-
-function Day({
-  date,
-  isToday,
-  muted,
-  entries,
-  canEdit,
-  onOpenTask,
-}: {
-  date: string
-  isToday: boolean
-  muted: boolean
-  entries: Entry[]
-  canEdit: boolean
-  onOpenTask: (id: string) => void
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id: `day:${date}` })
-  return (
-    <div ref={setNodeRef} className={`min-w-0 border-b border-r border-line p-1.5 ${isOver ? 'bg-accent-soft' : ''} ${muted ? 'bg-bg/50' : ''}`}>
-      <div className={`mb-1 text-xs ${isToday ? 'inline-flex size-5 items-center justify-center rounded-full bg-accent font-semibold text-on-accent' : muted ? 'text-text-2' : ''}`}>
-        {parseISODate(date).getDate()}
-      </div>
-      <div className="flex flex-col gap-1">
-        {entries.map((e) => (
-          <EntryChip key={`${e.kind}:${e.id}`} entry={e} canEdit={canEdit} onOpen={() => onOpenTask(e.t.task.id)} />
-        ))}
-      </div>
     </div>
   )
 }

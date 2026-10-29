@@ -1,15 +1,18 @@
 'use client'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Calendar } from 'lucide-react'
 import { useCurrentUser } from '@/components/app/current-user'
 import { PlannerIcon } from '@/components/ui/avatar'
-import { PriorityBadge } from '@/components/ui/controls'
+import { PriorityBadge, Segmented } from '@/components/ui/controls'
+import { toast } from '@/components/ui/toast'
+import { MySchedule } from './my-schedule'
 import { getBrowserClient } from '@/lib/supabase/browser'
 import { dueBucket, formatShort, isDueSoon } from '@/lib/dates'
 import { STATUS_LABEL, type TaskPriority, type TaskStatus } from '@/lib/types'
 
-type Row = {
+export type MyTaskRow = {
   id: string
   title: string
   status: TaskStatus
@@ -26,9 +29,15 @@ const GROUPS = [
   { key: 'later', title: 'Später' },
 ] as const
 
+type Row = MyTaskRow
+type View = 'list' | 'schedule'
+
 export function MyTasks() {
   const me = useCurrentUser()
   const db = getBrowserClient()
+  const router = useRouter()
+  const pathname = usePathname()
+  const view: View = useSearchParams().get('view') === 'schedule' ? 'schedule' : 'list'
   const [rows, setRows] = useState<Row[] | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -68,13 +77,37 @@ export function MyTasks() {
     return by
   }, [rows])
 
+  function setView(next: View) {
+    router.replace(next === 'schedule' ? `${pathname}?view=schedule` : pathname, { scroll: false })
+  }
+
+  // Fälligkeit verschieben: nur in Plannern mit Bearbeitungsrecht (RLS liefert sonst keine Zeile zurück)
+  async function move(id: string, dueDate: string) {
+    const prev = rows?.find((r) => r.id === id)
+    if (!prev) return
+    setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, due_date: dueDate } : r)) ?? rs)
+    const { data, error } = await db.from('tasks').update({ due_date: dueDate }).eq('id', id).select('id')
+    if (error || !data?.length) {
+      setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, due_date: prev.due_date } : r)) ?? rs)
+      toast(error ? 'Datum konnte nicht geändert werden' : 'Keine Bearbeitungsrechte in diesem Planner')
+    }
+  }
+
   return (
-    <div className="flex-1 overflow-y-auto">
-      <header className="border-b border-line bg-surface px-5 py-4">
-        <h1 className="text-lg font-semibold">Meine Aufgaben</h1>
-        <p className="text-sm text-text-2">Alle dir zugewiesenen, offenen Aufgaben über alle Planner</p>
+    <div className="flex flex-1 flex-col overflow-y-auto">
+      <header className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-5 py-4">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-lg font-semibold">Meine Aufgaben</h1>
+          <p className="text-sm text-text-2">Alle dir zugewiesenen, offenen Aufgaben über alle Planner</p>
+        </div>
+        <Segmented label="Ansicht" value={view} onChange={setView} options={[{ value: 'list', label: 'Liste' }, { value: 'schedule', label: 'Zeitplan' }]} />
       </header>
-      <div className="mx-auto flex max-w-4xl flex-col gap-6 p-5">
+      {view === 'schedule' && rows !== null && (
+        <div className="flex-1"><MySchedule rows={rows} onMove={(id, d) => void move(id, d)} /></div>
+      )}
+      {view === 'schedule' && rows === null && <p className="p-5 text-sm text-text-2">Lädt …</p>}
+      {view === 'list' && (
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 p-5">
         {rows === null && <p className="text-sm text-text-2">Lädt …</p>}
         {rows?.length === 0 && <p className="text-sm text-text-2">Dir sind keine offenen Aufgaben zugewiesen.</p>}
         {rows !== null &&
@@ -109,6 +142,7 @@ export function MyTasks() {
             ) : null,
           )}
       </div>
+      )}
     </div>
   )
 }

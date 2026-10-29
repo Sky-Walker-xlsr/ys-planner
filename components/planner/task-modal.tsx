@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Calendar, Check, ChevronDown, ChevronRight, FileText, GripVertical, Link2, Plus, Trash2, X } from 'lucide-react'
+import { Calendar, Check, ChevronDown, ChevronRight, FileText, GripVertical, ImageIcon, Link2, Paperclip, Plus, Trash2, Upload, X } from 'lucide-react'
 import { usePlanner, positionBetween, sortByPosition, useTaskIndex } from '@/lib/store/planner-store'
 import { Modal } from '@/components/ui/modal'
 import { UserAvatar, shortName } from '@/components/ui/avatar'
@@ -11,8 +11,9 @@ import { Checkbox, LabelPill, Popover } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
 import { LABEL_COLORS, LABEL_COLOR_NAMES, labelStyle } from '@/lib/design'
 import { formatDateTime, isOverdue, relativeTime } from '@/lib/dates'
-import { PRIORITY_LABEL, STATUS_LABEL, type SectionItem, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
-import { useActions } from './use-actions'
+import { formatBytes } from '@/lib/image'
+import { PRIORITY_LABEL, STATUS_LABEL, type SectionItem, type TaskFile, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
+import { TASK_FILES_BUCKET, useActions } from './use-actions'
 
 export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onClose: () => void; onOpenFile: (id: string) => void }) {
   const { state, canEdit, setPresence, presence } = usePlanner()
@@ -472,17 +473,76 @@ function ItemRow({ item }: { item: SectionItem }) {
 // Anhänge
 // ---------------------------------------------------------------------------
 function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: string) => void }) {
-  const { state, canEdit } = usePlanner()
+  const { state, db, canEdit } = usePlanner()
   const actions = useActions()
   const attached = Object.values(state.data.task_attachments).filter((a) => a.task_id === taskId)
   const files = attached.map((a) => state.data.kb_files[a.kb_file_id]).filter(Boolean)
   const available = Object.values(state.data.kb_files)
     .filter((f) => !attached.some((a) => a.kb_file_id === f.id))
     .sort((a, b) => a.name.localeCompare(b.name))
+  const uploads = useMemo(
+    () => Object.values(state.data.task_files).filter((f) => f.task_id === taskId).sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    [state.data.task_files, taskId],
+  )
+  const [busy, setBusy] = useState(0)
+  const [dragOver, setDragOver] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const thumbs = useSignedUrls(db, uploads.filter((f) => f.mime_type.startsWith('image/')))
+
+  async function upload(list: FileList | File[]) {
+    const all = Array.from(list)
+    setBusy((n) => n + all.length)
+    for (const f of all) {
+      await actions.uploadTaskFile(taskId, f)
+      setBusy((n) => n - 1)
+    }
+  }
+
+  async function open(file: TaskFile) {
+    const isImg = file.mime_type.startsWith('image/')
+    const { data, error } = await db.storage
+      .from(TASK_FILES_BUCKET)
+      .createSignedUrl(file.storage_path, 300, isImg ? undefined : { download: file.name })
+    if (error || !data) return toast('Datei konnte nicht geöffnet werden')
+    window.open(data.signedUrl, '_blank', 'noopener')
+  }
 
   return (
-    <section className="mt-6" aria-label="Anhänge">
+    <section
+      className={`mt-6 rounded-card ${dragOver ? 'outline-2 outline-dashed outline-accent outline-offset-4' : ''}`}
+      aria-label="Anhänge"
+      onDragOver={canEdit ? (e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragOver(true) } } : undefined}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={canEdit ? (e) => { e.preventDefault(); setDragOver(false); void upload(e.dataTransfer.files) } : undefined}
+    >
       <h3 className="mb-2 text-sm font-semibold">Anhänge</h3>
+      {uploads.length > 0 && (
+        <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {uploads.map((f) => (
+            <div key={f.id} className="group relative flex items-center gap-3 rounded-card border border-line bg-surface p-3 hover:border-accent">
+              <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left cursor-pointer" onClick={() => void open(f)}>
+                {thumbs[f.id] ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- signierte Storage-URL, kein next/image
+                  <img src={thumbs[f.id]} alt="" className="size-9 shrink-0 rounded-md object-cover" />
+                ) : (
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-bg text-text-2">
+                    {f.mime_type.startsWith('image/') ? <ImageIcon size={18} /> : <Paperclip size={18} />}
+                  </span>
+                )}
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{f.name}</span>
+                  <span className="block text-xs text-text-2">{formatBytes(f.size_bytes)}</span>
+                </span>
+              </button>
+              {canEdit && (
+                <button type="button" className="btn-icon size-6 opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label={`${f.name} löschen`} onClick={() => void actions.deleteTaskFile(f)}>
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {files.map((f) => (
           <div key={f.id} className="group relative flex items-center gap-3 rounded-card border border-line bg-surface p-3 hover:border-accent">
@@ -502,10 +562,21 @@ function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: 
         ))}
       </div>
       {canEdit && (
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => { if (e.target.files) void upload(e.target.files); e.target.value = '' }}
+        />
+        <button type="button" className="btn-text" onClick={() => inputRef.current?.click()} disabled={busy > 0}>
+          <Upload size={15} /> {busy > 0 ? `Lädt hoch … (${busy})` : 'Datei hochladen'}
+        </button>
         <Popover
           width={300}
           trigger={({ toggle }) => (
-            <button type="button" className="btn-text mt-1" onClick={toggle}><Plus size={15} /> Aus Knowledge Base anhängen</button>
+            <button type="button" className="btn-text" onClick={toggle}><Plus size={15} /> Aus Knowledge Base anhängen</button>
           )}
         >
           {(close) =>
@@ -526,9 +597,36 @@ function Attachments({ taskId, onOpenFile }: { taskId: string; onOpenFile: (id: 
             )
           }
         </Popover>
+        <span className="text-xs text-text-2">Bilder werden auf Full HD verkleinert und als WebP gespeichert · max. 10 MB</span>
+        </div>
       )}
     </section>
   )
+}
+
+/** Signierte URLs für Vorschaubilder; werden nur für neu hinzugekommene Dateien geholt. */
+function useSignedUrls(db: ReturnType<typeof usePlanner>['db'], files: TaskFile[]) {
+  const [urls, setUrls] = useState<Record<string, string>>({})
+  const missing = files.filter((f) => !urls[f.id])
+  const missingKey = missing.map((f) => f.id).join(',')
+  useEffect(() => {
+    if (!missingKey) return
+    let cancelled = false
+    const wanted = files.filter((f) => missingKey.includes(f.id))
+    void db.storage
+      .from(TASK_FILES_BUCKET)
+      .createSignedUrls(wanted.map((f) => f.storage_path), 3600)
+      .then(({ data }) => {
+        if (cancelled || !data) return
+        const next: Record<string, string> = {}
+        data.forEach((d, i) => { if (d.signedUrl) next[wanted[i].id] = d.signedUrl })
+        setUrls((prev) => ({ ...prev, ...next }))
+      })
+    return () => { cancelled = true }
+    // files ist über missingKey abgedeckt
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [db, missingKey])
+  return urls
 }
 
 function DeleteTask({ taskId, onDeleted }: { taskId: string; onDeleted: () => void }) {

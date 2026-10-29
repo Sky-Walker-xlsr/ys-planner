@@ -2,7 +2,11 @@
 import { useMemo } from 'react'
 import { usePlanner, positionBetween, sortByPosition } from '@/lib/store/planner-store'
 import { toast } from '@/components/ui/toast'
-import type { Label, SectionItem, Task, TaskPriority, TaskSection, TaskStatus } from '@/lib/types'
+import { ImageConversionError, isImage, toWebp } from '@/lib/image'
+import type { Label, SectionItem, Task, TaskFile, TaskPriority, TaskSection, TaskStatus } from '@/lib/types'
+
+export const TASK_FILES_BUCKET = 'task-files'
+const MAX_TASK_FILE_BYTES = 10 * 1024 * 1024
 
 export function useActions() {
   const { db, state, apply, mutate, viewer } = usePlanner()
@@ -77,13 +81,16 @@ export function useActions() {
         )
       },
 
-      deleteTask(id: string) {
+      async deleteTask(id: string) {
         const prev = state.data.tasks[id]
-        return mutate(
+        const files = Object.values(state.data.task_files).filter((f) => f.task_id === id)
+        const ok = await mutate(
           () => apply('delete', 'tasks', [prev]),
           () => db.from('tasks').delete().eq('id', id),
           'Aufgabe konnte nicht gelöscht werden',
         )
+        if (ok && files.length) await db.storage.from(TASK_FILES_BUCKET).remove(files.map((f) => f.storage_path))
+        return ok
       },
 
       async assign(taskId: string, userId: string) {
@@ -242,6 +249,59 @@ export function useActions() {
           () => apply('delete', 'task_attachments', [{ task_id: taskId, kb_file_id: kbFileId }]),
           () => db.from('task_attachments').delete().eq('task_id', taskId).eq('kb_file_id', kbFileId),
         )
+      },
+
+      /** Lädt eine Datei hoch; Bilder werden vorher auf Full HD verkleinert und in WebP umgewandelt. */
+      async uploadTaskFile(taskId: string, original: File) {
+        let file = original
+        if (isImage(original)) {
+          try {
+            file = await toWebp(original)
+          } catch (e) {
+            toast(`${original.name}: ${e instanceof ImageConversionError ? e.message : 'Bild konnte nicht verarbeitet werden'}`)
+            return false
+          }
+        }
+        if (file.size > MAX_TASK_FILE_BYTES) {
+          toast(`${file.name}: grösser als 10 MB`)
+          return false
+        }
+        const id = crypto.randomUUID()
+        const row: TaskFile = {
+          id, task_id: taskId, planner_id: plannerId, name: file.name.replace(/[/\\]/g, '-').slice(-200),
+          mime_type: file.type || 'application/octet-stream', size_bytes: file.size,
+          storage_path: `${plannerId}/${taskId}/${id}`,
+          uploaded_by: viewer.kind === 'user' ? viewer.id : null,
+          uploaded_by_guest: viewer.kind === 'guest' ? viewer.name : null,
+          created_at: now(),
+        }
+        // Zeile zuerst: die Storage-Policy verlangt eine passende task_files-Zeile
+        const { error } = await db.from('task_files').insert({
+          id, task_id: taskId, planner_id: plannerId, name: row.name,
+          mime_type: row.mime_type, size_bytes: row.size_bytes, storage_path: row.storage_path,
+        })
+        if (error) {
+          toast(`${file.name} konnte nicht hochgeladen werden`)
+          return false
+        }
+        const up = await db.storage.from(TASK_FILES_BUCKET).upload(row.storage_path, file, { contentType: row.mime_type })
+        if (up.error) {
+          await db.from('task_files').delete().eq('id', id)
+          toast(`${file.name} konnte nicht hochgeladen werden`)
+          return false
+        }
+        apply('upsert', 'task_files', [row])
+        return true
+      },
+
+      async deleteTaskFile(file: TaskFile) {
+        const ok = await mutate(
+          () => apply('delete', 'task_files', [file]),
+          () => db.from('task_files').delete().eq('id', file.id),
+          'Datei konnte nicht gelöscht werden',
+        )
+        if (ok) await db.storage.from(TASK_FILES_BUCKET).remove([file.storage_path])
+        return ok
       },
 
       async postComment(taskId: string, body: string, mentions: string[]) {
