@@ -64,7 +64,10 @@ export function FindBar({
     if (open) {
       setQuery(initialQuery)
       setIndex(0)
-      requestAnimationFrame(() => inputRef.current?.select())
+      requestAnimationFrame(() => {
+        inputRef.current?.focus()
+        inputRef.current?.select()
+      })
     }
   }, [open, initialQuery])
 
