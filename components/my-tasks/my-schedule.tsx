@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import { DndContext, KeyboardSensor, PointerSensor, useDraggable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { PrioritySquare } from '@/components/ui/controls'
 import { CalendarGrid, CalendarHeader, useCalendar } from '@/components/ui/calendar'
-import { isOverdue } from '@/lib/dates'
+import { dueChipClass } from '@/lib/dates'
 import type { MyTaskRow } from './my-tasks'
 
 /** Zeitplan der zugewiesenen, offenen Aufgaben nach Fälligkeitsdatum. */
@@ -57,14 +57,14 @@ export function MySchedule({ rows, onMove }: { rows: MyTaskRow[]; onMove: (id: s
 function Chip({ row, onOpen }: { row: MyTaskRow; onOpen: () => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: row.id })
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 20, position: 'relative' as const } : undefined
-  const overdue = isOverdue(row.due_date, false)
+  const dueClass = dueChipClass(row.due_date)
   return (
     <div ref={setNodeRef} style={style} {...listeners} {...attributes} className={isDragging ? 'opacity-70' : ''}>
       <button
         type="button"
         onClick={onOpen}
         className={`flex w-full min-w-0 items-center gap-1.5 rounded-md border border-line bg-surface px-1.5 py-1 text-left text-xs font-medium shadow-card cursor-pointer ${
-          overdue ? 'border-danger/60 text-danger' : ''
+          dueClass
         }`}
         title={`${row.title} · ${row.planners?.name ?? ''}`}
       >

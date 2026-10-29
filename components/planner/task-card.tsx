@@ -4,7 +4,7 @@ import type { TaskDerived } from '@/lib/store/planner-store'
 import { usePlanner } from '@/lib/store/planner-store'
 import { UserAvatar } from '@/components/ui/avatar'
 import { LabelPill, PrioritySquare, ProgressBar } from '@/components/ui/controls'
-import { formatShort, isDueSoon } from '@/lib/dates'
+import { dueTextClass, formatShort } from '@/lib/dates'
 import { PRIORITY_LABEL } from '@/lib/types'
 import { progressOf } from '@/lib/grouping'
 
@@ -13,7 +13,6 @@ export function TaskCard({ t, onOpen, dragging = false }: { t: TaskDerived; onOp
   const task = t.task
   const done = task.status === 'done'
   const strongPrio = task.priority === 'urgent' || task.priority === 'important'
-  const dueRed = isDueSoon(task.due_date, done)
   const pct = Math.round(progressOf(t) * 100)
 
   return (
@@ -55,7 +54,7 @@ export function TaskCard({ t, onOpen, dragging = false }: { t: TaskDerived; onOp
 
       <div className="mt-2.5 flex items-center gap-3 text-xs text-text-2">
         {task.due_date && (
-          <span className={`inline-flex items-center gap-1 ${dueRed ? 'font-medium text-danger' : ''}`}>
+          <span className={`inline-flex items-center gap-1 ${dueTextClass(task.due_date, done)}`}>
             <Calendar size={13} />
             {formatShort(task.due_date)}
           </span>

@@ -5,7 +5,7 @@ import { usePlanner, sortByPosition, type TaskDerived } from '@/lib/store/planne
 import { groupTasks, progressOf, type GroupBy } from '@/lib/grouping'
 import { UserAvatar } from '@/components/ui/avatar'
 import { Checkbox, LabelPill, Popover, PrioritySquare } from '@/components/ui/controls'
-import { isOverdue } from '@/lib/dates'
+import { dueTextClass } from '@/lib/dates'
 import { PRIORITY_LABEL, STATUS_LABEL, type TaskPriority, type TaskStatus } from '@/lib/types'
 import { useActions } from './use-actions'
 import { useAddToGroup } from './board'
@@ -195,7 +195,7 @@ function Row({ t, onOpen }: { t: TaskDerived; onOpen: () => void }) {
       <td className="px-3 py-1.5">
         <input
           type="date"
-          className={`input h-7 w-36 ${isOverdue(task.due_date, done) ? 'text-danger' : ''}`}
+          className={`input h-7 w-36 ${dueTextClass(task.due_date, done)}`}
           aria-label="Fälligkeitsdatum"
           disabled={!canEdit}
           value={task.due_date ?? ''}

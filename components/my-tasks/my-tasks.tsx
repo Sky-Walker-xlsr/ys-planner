@@ -9,7 +9,7 @@ import { PriorityBadge, Segmented } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
 import { MySchedule } from './my-schedule'
 import { getBrowserClient } from '@/lib/supabase/browser'
-import { dueBucket, formatShort, isDueSoon } from '@/lib/dates'
+import { dueBucket, dueTextClass, formatShort } from '@/lib/dates'
 import { STATUS_LABEL, type TaskPriority, type TaskStatus } from '@/lib/types'
 
 export type MyTaskRow = {
@@ -130,7 +130,7 @@ export function MyTasks() {
                         </span>
                         <PriorityBadge priority={r.priority} />
                         {r.due_date && (
-                          <span className={`inline-flex w-20 items-center gap-1 text-xs ${isDueSoon(r.due_date) ? 'font-medium text-danger' : 'text-text-2'}`}>
+                          <span className={`inline-flex w-20 items-center gap-1 text-xs ${dueTextClass(r.due_date)}`}>
                             <Calendar size={13} /> {formatShort(r.due_date)}
                           </span>
                         )}

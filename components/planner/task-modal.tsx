@@ -10,7 +10,7 @@ import { UserAvatar, shortName } from '@/components/ui/avatar'
 import { Checkbox, LabelPill, Popover } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
 import { LABEL_COLORS, LABEL_COLOR_NAMES, labelStyle } from '@/lib/design'
-import { formatDateTime, isOverdue, relativeTime } from '@/lib/dates'
+import { dueChipClass, dueTextClass, formatDateTime, relativeTime } from '@/lib/dates'
 import { formatBytes } from '@/lib/image'
 import { PRIORITY_LABEL, STATUS_LABEL, type SectionItem, type TaskFile, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
 import { taskFileUrl } from '@/lib/file-urls'
@@ -84,7 +84,7 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
             </Field>
             <Field label="Fälligkeitsdatum" id="task-due">
               <input id="task-due" type="date" disabled={!canEdit} value={task.due_date ?? ''}
-                className={`input ${isOverdue(task.due_date, task.status === 'done') ? 'border-danger text-danger' : ''}`}
+                className={`input ${dueChipClass(task.due_date, task.status === 'done')}`}
                 onChange={(e) => void actions.updateTask(task.id, { due_date: e.target.value || null })} />
             </Field>
             <div>
@@ -386,7 +386,7 @@ function SectionBox({ section }: { section: TaskSection }) {
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
         />
         {allDone && <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent-soft-text">Erledigt</span>}
-        <label className={`flex items-center gap-1 text-xs ${isOverdue(section.due_date, allDone) ? 'text-danger font-medium' : 'text-text-2'}`}>
+        <label className={`flex items-center gap-1 text-xs ${section.due_date ? dueTextClass(section.due_date, allDone) : 'text-text-2'}`}>
           <Calendar size={13} aria-hidden />
           <span className="sr-only">Fälligkeit des Abschnitts</span>
           <input type="date" className="w-[118px] bg-transparent text-xs outline-none disabled:opacity-100" disabled={!canEdit}

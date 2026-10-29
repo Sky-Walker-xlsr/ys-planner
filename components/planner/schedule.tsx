@@ -4,7 +4,7 @@ import { DndContext, PointerSensor, KeyboardSensor, useDraggable, useSensor, use
 import { usePlanner, type TaskDerived } from '@/lib/store/planner-store'
 import { PrioritySquare } from '@/components/ui/controls'
 import { CalendarGrid, CalendarHeader, useCalendar } from '@/components/ui/calendar'
-import { isOverdue } from '@/lib/dates'
+import { dueChipClass } from '@/lib/dates'
 import { useActions } from './use-actions'
 
 type Entry =
@@ -64,7 +64,7 @@ function EntryChip({ entry, canEdit, onOpen }: { entry: Entry; canEdit: boolean;
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `${entry.kind}:${entry.id}`, disabled: !canEdit })
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 20, position: 'relative' as const } : undefined
   const done = entry.kind === 'task' ? entry.t.task.status === 'done' : entry.done
-  const overdue = isOverdue(entry.date, done)
+  const dueClass = dueChipClass(entry.date, done)
 
   return (
     <div ref={setNodeRef} style={style} {...listeners} {...attributes} className={isDragging ? 'opacity-70' : ''}>
@@ -75,7 +75,7 @@ function EntryChip({ entry, canEdit, onOpen }: { entry: Entry; canEdit: boolean;
           entry.kind === 'task'
             ? 'border-line bg-surface px-1.5 py-1 text-xs font-medium shadow-card'
             : 'border-dashed border-line bg-transparent px-1.5 py-0.5 text-[11px] text-text-2'
-        } ${done ? 'line-through opacity-70' : ''} ${overdue ? 'border-danger/60 text-danger' : ''}`}
+        } ${done ? 'line-through opacity-70' : ''} ${dueClass}`}
         title={entry.kind === 'section' ? `Abschnitt «${entry.title}» · ${entry.t.task.title}` : entry.t.task.title}
       >
         {entry.kind === 'task' && <PrioritySquare priority={entry.t.task.priority} />}

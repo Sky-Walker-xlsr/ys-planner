@@ -42,10 +42,27 @@ export function isOverdue(due: string | null, done = false): boolean {
   return !!due && !done && due < todayISO()
 }
 
-/** überfällig oder heute/morgen fällig */
-export function isDueSoon(due: string | null, done = false): boolean {
-  if (!due || done) return false
-  return due <= addDays(todayISO(), 1)
+export type DueState = 'overdue' | 'soon' | 'normal'
+
+/** Fälligkeits-Farbe: rot = überfällig, orange = heute bis in 7 Tagen, sonst neutral. Erledigte sind neutral. */
+export function dueState(due: string | null, done = false): DueState | null {
+  if (!due) return null
+  if (done) return 'normal'
+  const today = todayISO()
+  if (due < today) return 'overdue'
+  return due <= addDays(today, 7) ? 'soon' : 'normal'
+}
+
+/** Textfarbe zum Fälligkeitsdatum (neutral = Standard-Textfarbe, im Dark Mode weiss) */
+export function dueTextClass(due: string | null, done = false): string {
+  const s = dueState(due, done)
+  return s === 'overdue' ? 'font-medium text-danger' : s === 'soon' ? 'font-medium text-prio-important' : 'text-text'
+}
+
+/** Rahmen + Text für Datums-Chips im Zeitplan */
+export function dueChipClass(due: string | null, done = false): string {
+  const s = dueState(due, done)
+  return s === 'overdue' ? 'border-danger/60 text-danger' : s === 'soon' ? 'border-prio-important/60 text-prio-important' : ''
 }
 
 const shortFmt = new Intl.DateTimeFormat('de-CH', { day: 'numeric', month: 'short' })
