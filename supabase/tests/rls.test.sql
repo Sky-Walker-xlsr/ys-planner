@@ -238,6 +238,9 @@ begin
   perform pg_temp.check('stranger', stranger, 'Mitglied werden verboten', 'cannot', ins_member);
   perform pg_temp.check('stranger', stranger, 'eigenen Planner anlegen', 'can', ins_planner);
   perform pg_temp.check('stranger', stranger, 'eigenen Ordner anlegen', 'can', 'insert into public.folders (owner_id, name) values (''a0000000-0000-4000-8000-000000000005'', ''Mein Ordner'')');
+  -- wie die App (.insert().select()): RETURNING läuft vor dem Owner-Mitglied-Trigger
+  perform pg_temp.check('stranger', stranger, 'Planner anlegen mit RETURNING', 'can', ins_planner || ' returning id');
+  perform pg_temp.check('stranger', stranger, 'Ordner anlegen mit RETURNING', 'can', 'insert into public.folders (owner_id, name) values (''a0000000-0000-4000-8000-000000000005'', ''Mein Ordner'') returning id');
   perform pg_temp.check('stranger', stranger, 'User-Suche möglich', 'rows', sel_users, 5);
   perform pg_temp.check('stranger', stranger, 'Planner in fremden Ordner verboten', 'cannot',
     'insert into public.planners (owner_id, folder_id, name) values (''a0000000-0000-4000-8000-000000000005'', ' || FO || ', ''X'')');

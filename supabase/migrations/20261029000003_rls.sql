@@ -48,8 +48,9 @@ create policy user_settings_update on public.user_settings for update to authent
 -- ---------------------------------------------------------------------------
 -- folders / folder_members
 -- ---------------------------------------------------------------------------
+-- owner_id-Bedingung: bei INSERT … RETURNING existiert die Owner-Mitgliedschaft (AFTER-Trigger) noch nicht
 create policy folders_select on public.folders for select to authenticated
-  using (app.can_see_folder(id));
+  using (owner_id = (select app.uid()) or app.can_see_folder(id));
 create policy folders_insert on public.folders for insert to authenticated
   with check (app.uid() is not null and owner_id = app.uid());
 create policy folders_update on public.folders for update to authenticated
@@ -71,7 +72,7 @@ create policy folder_members_delete on public.folder_members for delete to authe
 -- planners / planner_members
 -- ---------------------------------------------------------------------------
 create policy planners_select on public.planners for select to authenticated
-  using (public.planner_role(id) is not null);
+  using (owner_id = (select app.uid()) or public.planner_role(id) is not null);
 create policy planners_insert on public.planners for insert to authenticated
   with check (app.uid() is not null and owner_id = app.uid());
 -- Ordnerwechsel wird zusätzlich im Trigger geprüft (Owner des Zielordners)
