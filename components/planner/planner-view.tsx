@@ -22,6 +22,7 @@ import { request } from '@/lib/file-urls'
 import { PlannerSettingsDialog } from './planner-settings'
 import { ShareDialog } from './share-dialog'
 import { effectiveFolderRoles, folderOptions } from '@/lib/folders'
+import { ColorPicker } from '@/components/ui/color-picker'
 
 const TABS = [
   { key: 'board', label: 'Board' },
@@ -198,6 +199,7 @@ function PlannerMenu() {
   const planner = state.planner!
   const [dialog, setDialog] = useState<'rename' | 'move' | 'settings' | 'delete' | null>(null)
   const [name, setName] = useState(planner.name)
+  const [color, setColor] = useState(planner.color)
   const [folders, setFolders] = useState<{ id: string; label: string }[]>([])
   const [target, setTarget] = useState(planner.folder_id ?? '')
 
@@ -238,7 +240,7 @@ function PlannerMenu() {
       >
         {(close) => (
           <>
-            <MenuItem onClick={() => { close(); setName(planner.name); setDialog('rename') }}>Umbenennen</MenuItem>
+            <MenuItem onClick={() => { close(); setName(planner.name); setColor(planner.color); setDialog('rename') }}>Name und Farbe</MenuItem>
             <MenuItem onClick={() => { close(); void openMove() }}>Verschieben</MenuItem>
             <MenuItem onClick={() => { close(); setDialog('settings') }}>Einstellungen</MenuItem>
             <MenuItem danger onClick={() => { close(); setDialog('delete') }}>Planner löschen</MenuItem>
@@ -246,11 +248,15 @@ function PlannerMenu() {
         )}
       </Popover>
 
-      <Modal open={dialog === 'rename'} onClose={() => setDialog(null)} title="Planner umbenennen" maxWidth={420}>
-        <form onSubmit={(e) => { e.preventDefault(); if (name.trim()) void save({ name: name.trim() }) }} className="flex flex-col gap-4">
+      <Modal open={dialog === 'rename'} onClose={() => setDialog(null)} title="Name und Farbe" maxWidth={420}>
+        <form onSubmit={(e) => { e.preventDefault(); if (name.trim()) void save({ name: name.trim(), color }) }} className="flex flex-col gap-4">
           <div>
             <label htmlFor="rename-planner" className="field-label">Name</label>
             <input id="rename-planner" className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus maxLength={120} />
+          </div>
+          <div>
+            <label htmlFor="edit-planner-color" className="field-label">Farbe</label>
+            <ColorPicker id="edit-planner-color" value={color} onChange={setColor} />
           </div>
           <div className="flex justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={() => setDialog(null)}>Abbrechen</button>

@@ -1,3 +1,4 @@
+import { textOnColor } from '@/lib/design'
 import type { User } from '@/lib/types'
 
 export function initials(name: string) {
@@ -65,8 +66,8 @@ export function AvatarStack({ users, max = 4, size = 28 }: { users: User[]; max?
 export function PlannerIcon({ name, color, size = 20 }: { name: string; color: string; size?: number }) {
   return (
     <span
-      className="inline-flex shrink-0 items-center justify-center rounded-[5px] font-semibold text-white"
-      style={{ width: size, height: size, background: color, fontSize: Math.round(size * 0.5) }}
+      className="inline-flex shrink-0 items-center justify-center rounded-[5px] font-semibold"
+      style={{ width: size, height: size, background: color, color: textOnColor(color), fontSize: Math.round(size * 0.5) }}
       aria-hidden
     >
       {name.trim().charAt(0).toUpperCase() || '?'}

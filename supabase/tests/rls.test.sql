@@ -402,6 +402,8 @@ declare
   stranger jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000005');
   submember jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000006');
 begin
+  perform pg_temp.check('owner', owner, 'Planner-Farbe: beliebiger Hex-Wert', 'can', 'update public.planners set color = ''#a1b2c3'' where id = ' || P3);
+  perform pg_temp.check('owner', owner, 'Planner-Farbe: nur Hex erlaubt', 'cannot', 'update public.planners set color = ''url(https://example.com/x)'' where id = ' || P3);
   perform pg_temp.check('folder', fmember, 'Unterordner: Mitglied des Elternordners sieht ihn', 'rows', 'select id from public.folders where id = ' || SUB, 1);
   perform pg_temp.check('folder', fmember, 'Unterordner: Rolle wird im Planner vererbt', 'rows', 'select 1 where public.planner_role(' || P3 || ') = ''editor''', 1);
   perform pg_temp.check('folder', fmember, 'Unterordner: Bearbeiter darf nicht umbenennen', 'cannot', 'update public.folders set name = ''x'' where id = ' || SUB);

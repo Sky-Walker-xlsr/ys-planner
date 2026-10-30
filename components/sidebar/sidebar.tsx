@@ -11,6 +11,7 @@ import {
 import { useCurrentUser } from '@/components/app/current-user'
 import { Avatar, PlannerIcon } from '@/components/ui/avatar'
 import { MenuItem, Popover } from '@/components/ui/controls'
+import { ColorPicker } from '@/components/ui/color-picker'
 import { Modal } from '@/components/ui/modal'
 import { toast } from '@/components/ui/toast'
 import { FolderShareDialog } from '@/components/share/folder-share-dialog'
@@ -526,22 +527,10 @@ function NewPlannerDialog({
           <label htmlFor="planner-name" className="field-label">Name</label>
           <input id="planner-name" className="input" autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={120} required />
         </div>
-        <fieldset>
-          <legend className="field-label">Farbe</legend>
-          <div className="flex flex-wrap gap-2">
-            {PLANNER_COLORS.map((c) => (
-              <button
-                key={c}
-                type="button"
-                aria-label={`Farbe ${c}`}
-                aria-pressed={c === color}
-                onClick={() => setColor(c)}
-                className={`size-7 rounded-md cursor-pointer ${c === color ? 'ring-2 ring-offset-2 ring-accent ring-offset-surface' : ''}`}
-                style={{ background: c }}
-              />
-            ))}
-          </div>
-        </fieldset>
+        <div>
+          <label htmlFor="planner-color" className="field-label">Farbe</label>
+          <ColorPicker id="planner-color" value={color} onChange={setColor} />
+        </div>
         <div>
           <label htmlFor="planner-folder" className="field-label">Ordner</label>
           <select id="planner-folder" className="input" value={folderId} onChange={(e) => setFolderId(e.target.value)}>
