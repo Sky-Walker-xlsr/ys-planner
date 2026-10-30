@@ -25,6 +25,34 @@ export function addDays(iso: string, days: number): string {
   return toISODate(d)
 }
 
+/** Erster des Monats */
+export function monthStart(iso: string): string {
+  return `${iso.slice(0, 7)}-01`
+}
+
+/** month ist ein Monatserster */
+export function addMonths(month: string, n: number): string {
+  const d = parseISODate(month)
+  return toISODate(new Date(d.getFullYear(), d.getMonth() + n, 1))
+}
+
+/** Alle Monatsersten von first bis last */
+export function monthRange(first: string, last: string): string[] {
+  const out: string[] = []
+  for (let m = first; m <= last; m = addMonths(m, 1)) out.push(m)
+  return out
+}
+
+/** Tage eines Monats und Anzahl leerer Felder davor (Wochen beginnen am Montag) */
+export function monthGrid(month: string): { leading: number; days: string[] } {
+  const d = parseISODate(month)
+  const count = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+  return {
+    leading: (d.getDay() + 6) % 7,
+    days: Array.from({ length: count }, (_, i) => addDays(month, i)),
+  }
+}
+
 /** Sonntag der aktuellen Woche (Wochen beginnen am Montag) */
 export function endOfWeekISO(iso: string): string {
   const d = parseISODate(iso)

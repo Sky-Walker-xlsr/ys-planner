@@ -118,7 +118,7 @@ export function MyTasks() {
         <Segmented label="Ansicht" value={view} onChange={setView} options={[{ value: 'list', label: 'Liste' }, { value: 'schedule', label: 'Zeitplan' }]} />
       </header>
       {view === 'schedule' && rows !== null && (
-        <div className="flex-1"><MySchedule rows={rows} onMove={(id, d) => void move(id, d)} /></div>
+        <div className="flex min-h-0 flex-1 flex-col"><MySchedule rows={rows} onMove={(id, d) => void move(id, d)} /></div>
       )}
       {view === 'schedule' && rows === null && <p className="p-5 text-sm text-text-2">Lädt …</p>}
       {view === 'list' && (

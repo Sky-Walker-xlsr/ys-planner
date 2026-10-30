@@ -33,7 +33,7 @@ export function MySchedule({ rows, onMove }: { rows: MyTaskRow[]; onMove: (id: s
   }
 
   return (
-    <div className="flex h-full flex-col p-5">
+    <div className="flex min-h-0 flex-1 flex-col p-5">
       <CalendarHeader cal={cal} />
       <DndContext sensors={sensors} onDragEnd={onDragEnd}>
         <CalendarGrid

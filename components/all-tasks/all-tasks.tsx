@@ -148,7 +148,7 @@ export function AllTasks() {
 
       {rows === null && <p className="p-5 text-sm text-text-2">Lädt …</p>}
       {view === 'schedule' && rows !== null && (
-        <div className="flex-1"><MySchedule rows={filtered} onMove={(id, d) => void move(id, d)} /></div>
+        <div className="flex min-h-0 flex-1 flex-col"><MySchedule rows={filtered} onMove={(id, d) => void move(id, d)} /></div>
       )}
       {view === 'list' && rows !== null && (
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-5">
