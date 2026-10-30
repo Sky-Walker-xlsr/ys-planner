@@ -7,7 +7,7 @@ import { CalendarGrid, CalendarHeader, useCalendar } from '@/components/ui/calen
 import { dueChipClass } from '@/lib/dates'
 import type { MyTaskRow } from './my-tasks'
 
-/** Zeitplan der zugewiesenen, offenen Aufgaben nach Fälligkeitsdatum. */
+/** Zeitplan von Aufgaben nach Fälligkeitsdatum (Meine Aufgaben, Alle Tasks). */
 export function MySchedule({ rows, onMove }: { rows: MyTaskRow[]; onMove: (id: string, dueDate: string) => void }) {
   const cal = useCalendar()
   const router = useRouter()
@@ -57,7 +57,7 @@ export function MySchedule({ rows, onMove }: { rows: MyTaskRow[]; onMove: (id: s
 function Chip({ row, onOpen }: { row: MyTaskRow; onOpen: () => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: row.id })
   const style = transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 20, position: 'relative' as const } : undefined
-  const dueClass = dueChipClass(row.due_date)
+  const dueClass = dueChipClass(row.due_date, row.status === 'done')
   return (
     <div ref={setNodeRef} style={style} {...listeners} {...attributes} className={isDragging ? 'opacity-70' : ''}>
       <button
