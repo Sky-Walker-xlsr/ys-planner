@@ -44,12 +44,8 @@ export function MembersPanel({
       return
     }
     const t = setTimeout(async () => {
-      const { data } = await db
-        .from('users')
-        .select('id, email, display_name, avatar_color')
-        .or(`display_name.ilike.*${q}*,email.ilike.*${q}*`)
-        .order('display_name')
-        .limit(8)
+      // Bekannte Personen per Teilstring, alle anderen nur per vollständiger E-Mail
+      const { data } = await db.rpc('search_users', { q })
       setResults((data ?? []) as User[])
     }, 200)
     return () => clearTimeout(t)
@@ -81,7 +77,7 @@ export function MembersPanel({
               <input
                 id="member-search"
                 className="input pl-8"
-                placeholder="Name oder E-Mail"
+                placeholder="Name oder vollständige E-Mail"
                 autoComplete="off"
                 value={selected ? selected.display_name : query}
                 onChange={(e) => {

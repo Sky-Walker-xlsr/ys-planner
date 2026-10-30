@@ -53,7 +53,7 @@ export default async function SharePage({
       token={token}
       requireName={link.require_name}
       requirePassword={!!link.password_hash}
-      error={error === 'password' ? 'Das Passwort ist falsch.' : error === 'name' ? 'Bitte gib deinen Namen ein.' : null}
+      error={error === 'password' ? 'Das Passwort ist falsch.' : error === 'name' ? 'Bitte gib deinen Namen ein.' : error === 'rate' ? 'Zu viele Versuche. Bitte warte eine Minute.' : null}
     />
   )
 }

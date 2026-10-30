@@ -7,6 +7,7 @@ import { serverEnv } from '@/lib/env'
 import { sendMail } from '@/lib/mail'
 
 const TOKEN_HOURS = 24
+const MAX_MAILS_PER_DAY = 10
 
 // Zusätzliche Absender-Adresse hinterlegen. Aktiv erst nach Klick auf den Bestätigungslink.
 export async function POST(req: NextRequest) {
@@ -24,6 +25,11 @@ export async function POST(req: NextRequest) {
   const { data: taken } = await db.from('user_sender_emails').select('user_id').eq('email', email).not('confirmed_at', 'is', null).maybeSingle()
   if (taken && taken.user_id !== ctx.actor.id) return jsonError('Diese Adresse ist bereits einem anderen Konto zugeordnet', 409)
   if (taken) return jsonError('Diese Adresse ist bereits bestätigt', 409)
+
+  // Schutz vor Missbrauch als Mail-Versender
+  const { data: allowed, error: limitError } = await db.rpc('mail_rate_hit', { u: ctx.actor.id, max_per_day: MAX_MAILS_PER_DAY })
+  if (limitError) return jsonError('Adresse konnte nicht gespeichert werden', 500)
+  if (!allowed) return jsonError('Zu viele Bestätigungsmails heute. Bitte morgen erneut versuchen.', 429)
 
   const { error } = await db.from('user_sender_emails').upsert(
     {
@@ -43,7 +49,7 @@ export async function POST(req: NextRequest) {
       subject: 'Absender-Adresse für ys-planner bestätigen',
       heading: 'Adresse bestätigen',
       paragraphs: [
-        `${ctx.actor.name} möchte Aufgaben auch von ${email} per Mail an ys-planner senden.`,
+        `Ein ys-planner-Konto möchte Aufgaben auch von ${email} per Mail erstellen.`,
         `Bestätige die Adresse innerhalb von ${TOKEN_HOURS} Stunden. Wenn du das nicht warst, ignoriere diese Mail.`,
       ],
       cta: { label: 'Adresse bestätigen', href: link },

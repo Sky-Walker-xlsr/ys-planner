@@ -135,7 +135,7 @@ function LinksPanel({ plannerId }: { plannerId: string }) {
           {usePassword && (
             <div>
               <label htmlFor="link-password" className="field-label">Passwort</label>
-              <input id="link-password" type="password" className="input" autoComplete="new-password" minLength={4} required
+              <input id="link-password" type="password" className="input" autoComplete="new-password" minLength={8} required
                 value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
           )}

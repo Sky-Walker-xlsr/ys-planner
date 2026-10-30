@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { recipients, taskUrl } from '@/lib/notify'
 import { sendMail } from '@/lib/mail'
 import { serverEnv } from '@/lib/env'
+import { safeEqual } from '@/lib/auth/crypto'
 import { addDays, toISODate } from '@/lib/dates'
 
 const TZ = 'Europe/Zurich'
@@ -26,7 +27,7 @@ type SectionRow = {
 // Täglich 07:00 Europe/Zurich (Cron Trigger läuft um 05:00 und 06:00 UTC; hier wird die lokale Stunde geprüft).
 // Bündelt pro User alle Aufgaben und Abschnitte, die morgen fällig sind.
 export async function POST(req: NextRequest) {
-  if (req.headers.get('authorization') !== `Bearer ${serverEnv.cronSecret}`) {
+  if (!(await safeEqual(req.headers.get('authorization') ?? '', `Bearer ${serverEnv.cronSecret}`))) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
   const force = req.nextUrl.searchParams.get('force') === '1'

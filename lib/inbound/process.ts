@@ -2,7 +2,7 @@
 import PostalMime from 'postal-mime'
 import type { MailContent } from '@/lib/mail'
 import type { Role, TaskPriority } from '@/lib/types'
-import { senderAuthenticated } from './auth'
+import { senderAuthenticated, topAuthServId } from './auth'
 import { htmlToMarkdown } from './html'
 import { parseSubject } from './subject'
 
@@ -70,7 +70,10 @@ export async function processInbound(input: InboundInput, deps: InboundDeps, opt
   // Absender: Zitadel-Mail oder bestätigte eigene Adresse, und SPF/DKIM bestanden
   const allowed = from === user.email.trim().toLowerCase() || (await deps.confirmedSenders(user.id)).includes(from)
   if (!allowed) return reject('Absender ist für diese Adresse nicht berechtigt')
-  if (!senderAuthenticated(mail.headers, from)) return reject('Absender konnte nicht verifiziert werden (SPF/DKIM)')
+  if (!senderAuthenticated(mail.headers, from)) {
+    console.log('Mail: SPF/DKIM nicht bestätigt, authserv-id:', topAuthServId(mail.headers))
+    return reject('Absender konnte nicht verifiziert werden (SPF/DKIM)')
+  }
 
   const subject = parseSubject(mail.subject)
   const hints: string[] = []

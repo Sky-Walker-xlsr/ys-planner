@@ -39,14 +39,19 @@ export async function GET(req: NextRequest) {
     return new NextResponse('Anmeldung fehlgeschlagen. Bitte erneut versuchen.', { status: 400 })
   }
 
-  const email = String(claims.email ?? '')
+  const db = createServiceClient()
+  // Unbestätigte Mail nicht übernehmen: Sie gilt als erlaubter Absender und Benachrichtigungs-Adresse
+  let email = String(claims.email ?? '')
+  if (claims.email_verified === false) {
+    const { data: existing } = await db.from('users').select('email').eq('zitadel_sub', claims.sub).maybeSingle()
+    email = existing?.email ?? ''
+  }
   const displayName =
     String(claims.name ?? '').trim() ||
     [claims.given_name, claims.family_name].filter(Boolean).join(' ').trim() ||
     String(claims.preferred_username ?? '') ||
-    email
+    String(claims.email ?? '')
 
-  const db = createServiceClient()
   const { data: user, error } = await db
     .from('users')
     .upsert(

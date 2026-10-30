@@ -47,6 +47,10 @@ export function SettingsView() {
       notify_on_invite: settings.notify_on_invite,
     })
     setSaving(false)
+    if (error?.message.includes('notify_email_not_confirmed')) {
+      toast('Diese Adresse ist nicht bestätigt. Hinterlege sie zuerst unter «Mail an Planner».')
+      return
+    }
     toast(error ? 'Einstellungen konnten nicht gespeichert werden' : 'Gespeichert')
   }
 
@@ -92,6 +96,7 @@ export function SettingsView() {
                 <label htmlFor="notify-email" className="field-label">E-Mail-Adresse für Benachrichtigungen</label>
                 <input id="notify-email" type="email" className="input" disabled={!settings.notify_enabled}
                   value={settings.notify_email ?? ''} onChange={(e) => set('notify_email', e.target.value)} />
+                <p className="mt-1 text-xs text-text-2">Erlaubt sind deine Login-Mail und bestätigte Adressen aus «Mail an Planner».</p>
               </div>
               <fieldset disabled={!settings.notify_enabled} className="flex flex-col disabled:opacity-60">
                 <legend className="field-label">Benachrichtigen bei</legend>

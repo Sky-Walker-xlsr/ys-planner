@@ -206,6 +206,14 @@ describe('Authentication-Results', () => {
     ]
     expect(senderAuthenticated(headers, 'anna@example.com')).toBe(false)
   })
+  it('selbst mitgeschickter Header (fremde authserv-id) zählt nicht', () => {
+    const headers = [{ key: 'authentication-results', value: 'evil.example; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=anna@example.com' }]
+    expect(senderAuthenticated(headers, 'anna@example.com')).toBe(false)
+    expect(senderAuthenticated([{ key: 'authentication-results', value: 'notcloudflare.net; dkim=pass header.d=example.com' }], 'anna@example.com')).toBe(false)
+  })
+  it('kein Header → nicht verifiziert', () => {
+    expect(senderAuthenticated([], 'anna@example.com')).toBe(false)
+  })
   it('DKIM einer fremden Domain reicht nicht', () => {
     const headers = [{ key: 'authentication-results', value: 'mx.cloudflare.net; dkim=pass header.d=mailer.com; spf=fail smtp.mailfrom=x@mailer.com' }]
     expect(senderAuthenticated(headers, 'anna@example.com')).toBe(false)

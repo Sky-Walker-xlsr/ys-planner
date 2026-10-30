@@ -107,6 +107,10 @@ insert into public.kb_files (id, planner_id, name, storage_path) values
 insert into public.task_files (id, task_id, planner_id, name, size_bytes, storage_path) values
   ('70000000-0000-4000-8000-000000000001', 'e0000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000001', 'Foto.webp', 1000, '');
 
+insert into public.user_sender_emails (user_id, email, confirmed_at) values
+  ('a0000000-0000-4000-8000-000000000005', 'bestaetigt@test.local', now()),
+  ('a0000000-0000-4000-8000-000000000005', 'offen@test.local', null);
+
 -- Eingang (Tasks ohne Planner)
 insert into public.tasks (id, owner_id, title) values
   ('e1000000-0000-4000-8000-000000000003', 'a0000000-0000-4000-8000-000000000003', 'Inbox Leser'),
@@ -286,7 +290,19 @@ begin
   -- wie die App (.insert().select()): RETURNING läuft vor dem Owner-Mitglied-Trigger
   perform pg_temp.check('stranger', stranger, 'Planner anlegen mit RETURNING', 'can', ins_planner || ' returning id');
   perform pg_temp.check('stranger', stranger, 'Ordner anlegen mit RETURNING', 'can', 'insert into public.folders (owner_id, name) values (''a0000000-0000-4000-8000-000000000005'', ''Mein Ordner'') returning id');
-  perform pg_temp.check('stranger', stranger, 'User-Suche möglich', 'rows', sel_users, 5);
+  perform pg_temp.check('stranger', stranger, 'sieht nur sich selbst', 'rows', sel_users, 1);
+  perform pg_temp.check('editor', editor, 'sieht Personen aus gemeinsamen Plannern/Ordnern', 'rows', sel_users, 4);
+  perform pg_temp.check('stranger', stranger, 'Suche: fremde Person per Teilstring nicht auffindbar', 'rows', 'select id from public.search_users(''owner'')', 0);
+  perform pg_temp.check('stranger', stranger, 'Suche: fremde Person per exakter E-Mail auffindbar', 'rows', 'select id from public.search_users(''owner@test.local'')', 1);
+  perform pg_temp.check('editor', editor, 'Suche: bekannte Person per Teilstring auffindbar', 'rows', 'select id from public.search_users(''owner'')', 1);
+  perform pg_temp.check('guest-edit', g_edit, 'Suche: Gäste finden niemanden', 'rows', 'select id from public.search_users(''owner@test.local'')', 0);
+  perform pg_temp.check('owner', owner, 'Zitadel-ID nicht lesbar', 'cannot', 'select zitadel_sub from public.users');
+  perform pg_temp.check('owner', owner, 'users nicht direkt schreibbar', 'cannot', 'update public.users set display_name = ''x'' where id = ''a0000000-0000-4000-8000-000000000001''');
+  perform pg_temp.check('stranger', stranger, 'notify_email: fremde Adresse verboten', 'cannot', 'update public.user_settings set notify_email = ''opfer@evil.ch'' where user_id = ''a0000000-0000-4000-8000-000000000005''');
+  perform pg_temp.check('stranger', stranger, 'notify_email: unbestätigte Adresse verboten', 'cannot', 'update public.user_settings set notify_email = ''offen@test.local'' where user_id = ''a0000000-0000-4000-8000-000000000005''');
+  perform pg_temp.check('stranger', stranger, 'notify_email: bestätigte Adresse erlaubt', 'can', 'update public.user_settings set notify_email = ''bestaetigt@test.local'' where user_id = ''a0000000-0000-4000-8000-000000000005''');
+  perform pg_temp.check('stranger', stranger, 'Rate-Limit-Tabelle nicht lesbar', 'cannot', 'select * from public.mail_rate_limits');
+  perform pg_temp.check('stranger', stranger, 'Rate-Limit-Funktion nicht aufrufbar', 'cannot', 'select public.mail_rate_hit(''a0000000-0000-4000-8000-000000000005'', 1000)');
   perform pg_temp.check('stranger', stranger, 'Planner in fremden Ordner verboten', 'cannot',
     'insert into public.planners (owner_id, folder_id, name) values (''a0000000-0000-4000-8000-000000000005'', ' || FO || ', ''X'')');
 

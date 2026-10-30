@@ -72,3 +72,11 @@ export async function verifyPassword(password: string, stored: string): Promise<
   for (let i = 0; i < actual.length; i++) diff |= actual[i] ^ expected[i]
   return diff === 0
 }
+
+/** Zeitkonstanter Vergleich (über die Hashes, damit auch die Länge nichts verrät) */
+export async function safeEqual(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([sha256Hex(a), sha256Hex(b)])
+  let diff = 0
+  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i)
+  return diff === 0
+}

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { serverEnv } from '@/lib/env'
+import { safeEqual } from '@/lib/auth/crypto'
 import { sendMail } from '@/lib/mail'
 import { filesBucket } from '@/lib/r2'
 import { normalizeMime } from '@/lib/file-access'
@@ -9,7 +10,7 @@ import { processInbound, type InboundDeps, type PlannerCandidate } from '@/lib/i
 // Interner Endpunkt für den Email Worker (worker.ts › email()). Body: Roh-Mail (RFC 822).
 // Antwort { accept, reason } – bei accept=false lehnt der Worker die Mail per setReject ab.
 export async function POST(req: NextRequest) {
-  if (req.headers.get('authorization') !== `Bearer ${serverEnv.cronSecret}`) {
+  if (!(await safeEqual(req.headers.get('authorization') ?? '', `Bearer ${serverEnv.cronSecret}`))) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
   const envelopeTo = req.headers.get('x-envelope-to') ?? ''

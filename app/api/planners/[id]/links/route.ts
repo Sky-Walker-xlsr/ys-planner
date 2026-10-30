@@ -62,7 +62,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     expiresAt?: string | null
   }
   if (body.permission !== 'read' && body.permission !== 'edit') return jsonError('Ungültige Berechtigung')
-  if (body.password != null && body.password.length < 4) return jsonError('Passwort zu kurz (mind. 4 Zeichen)')
+  if (body.password != null && body.password.length < 8) return jsonError('Passwort zu kurz (mind. 8 Zeichen)')
   let expiresAt: string | null = null
   if (body.expiresAt) {
     // Datum (YYYY-MM-DD) gilt bis Ende des Tages
