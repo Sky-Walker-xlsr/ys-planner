@@ -11,7 +11,7 @@ import {
   EMPTY_FILTERS, GROUP_BY_LABEL, activeFilterCount, matchesFilters, type Filters, type GroupBy,
 } from '@/lib/grouping'
 import { DUE_BUCKET_LABEL, type DueBucket } from '@/lib/dates'
-import { PRIORITY_LABEL, STATUS_LABEL, type Folder, type Role, type TaskPriority, type TaskStatus } from '@/lib/types'
+import { PRIORITY_LABEL, STATUS_LABEL, type TaskPriority, type TaskStatus } from '@/lib/types'
 import { Board } from './board'
 import { Grid } from './grid'
 import { Schedule } from './schedule'
@@ -21,8 +21,6 @@ import { TaskModal } from './task-modal'
 import { request } from '@/lib/file-urls'
 import { PlannerSettingsDialog } from './planner-settings'
 import { ShareDialog } from './share-dialog'
-import { effectiveFolderRoles, folderOptions } from '@/lib/folders'
-import { ColorPicker } from '@/components/ui/color-picker'
 
 const TABS = [
   { key: 'board', label: 'Board' },
@@ -194,31 +192,10 @@ function FavoriteStar({ plannerId, userId }: { plannerId: string; userId: string
 }
 
 function PlannerMenu() {
-  const { state, db, viewer } = usePlanner()
+  const { state } = usePlanner()
   const router = useRouter()
   const planner = state.planner!
-  const [dialog, setDialog] = useState<'rename' | 'move' | 'settings' | 'delete' | null>(null)
-  const [name, setName] = useState(planner.name)
-  const [color, setColor] = useState(planner.color)
-  const [folders, setFolders] = useState<{ id: string; label: string }[]>([])
-  const [target, setTarget] = useState(planner.folder_id ?? '')
-
-  async function openMove() {
-    setDialog('move')
-    const [{ data: fs }, { data: fm }] = await Promise.all([
-      db.from('folders').select('*').order('position'),
-      db.from('folder_members').select('folder_id, role').eq('user_id', viewer.id),
-    ])
-    const all = (fs ?? []) as Folder[]
-    const roles = effectiveFolderRoles(all, (fm ?? []) as { folder_id: string; role: Role }[])
-    setFolders(folderOptions(all).filter((o) => roles.get(o.id) === 'owner'))
-  }
-
-  async function save(patch: Record<string, unknown>) {
-    const { error } = await db.from('planners').update(patch).eq('id', planner.id)
-    if (error) toast('Änderung nicht möglich')
-    else setDialog(null)
-  }
+  const [dialog, setDialog] = useState<'settings' | 'delete' | null>(null)
 
   async function remove() {
     // Die Route löscht auch alle Dateien des Planners in R2
@@ -240,46 +217,11 @@ function PlannerMenu() {
       >
         {(close) => (
           <>
-            <MenuItem onClick={() => { close(); setName(planner.name); setColor(planner.color); setDialog('rename') }}>Name und Farbe</MenuItem>
-            <MenuItem onClick={() => { close(); void openMove() }}>Verschieben</MenuItem>
             <MenuItem onClick={() => { close(); setDialog('settings') }}>Einstellungen</MenuItem>
             <MenuItem danger onClick={() => { close(); setDialog('delete') }}>Planner löschen</MenuItem>
           </>
         )}
       </Popover>
-
-      <Modal open={dialog === 'rename'} onClose={() => setDialog(null)} title="Name und Farbe" maxWidth={420}>
-        <form onSubmit={(e) => { e.preventDefault(); if (name.trim()) void save({ name: name.trim(), color }) }} className="flex flex-col gap-4">
-          <div>
-            <label htmlFor="rename-planner" className="field-label">Name</label>
-            <input id="rename-planner" className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus maxLength={120} />
-          </div>
-          <div>
-            <label htmlFor="edit-planner-color" className="field-label">Farbe</label>
-            <ColorPicker id="edit-planner-color" value={color} onChange={setColor} />
-          </div>
-          <div className="flex justify-end gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setDialog(null)}>Abbrechen</button>
-            <button type="submit" className="btn-primary">Speichern</button>
-          </div>
-        </form>
-      </Modal>
-
-      <Modal open={dialog === 'move'} onClose={() => setDialog(null)} title="Planner verschieben" subtitle="Nur in Ordner, deren Owner du bist." maxWidth={420}>
-        <form onSubmit={(e) => { e.preventDefault(); void save({ folder_id: target || null }) }} className="flex flex-col gap-4">
-          <div>
-            <label htmlFor="move-planner" className="field-label">Ordner</label>
-            <select id="move-planner" className="input" value={target} onChange={(e) => setTarget(e.target.value)}>
-              <option value="">Ohne Ordner</option>
-              {folders.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
-            </select>
-          </div>
-          <div className="flex justify-end gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setDialog(null)}>Abbrechen</button>
-            <button type="submit" className="btn-primary">Verschieben</button>
-          </div>
-        </form>
-      </Modal>
 
       {dialog === 'settings' && <PlannerSettingsDialog open onClose={() => setDialog(null)} />}
 
