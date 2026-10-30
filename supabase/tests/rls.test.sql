@@ -573,6 +573,42 @@ update public.tasks set remind_at = now() - interval '1 minute' where id = 'e000
 insert into rls_results (actor, label, passed, detail)
 select 'service', 'Ordner-Mail: Erinnerung geht an die Ordner-Adresse', count(*) = 1, 'rows=' || count(*) from public.claim_due_task_reminders(10) where email = 'firma@test.local';
 
+-- Unterpunkte: eine Ebene, nur im selben Abschnitt
+insert into public.task_sections (id, task_id, title) values
+  ('f5000000-0000-4000-8000-000000000001', 'e0000000-0000-4000-8000-000000000001', 'Mit Unterpunkten'),
+  ('f5000000-0000-4000-8000-000000000002', 'e0000000-0000-4000-8000-000000000001', 'Anderer');
+insert into public.section_items (id, section_id, title) values
+  ('f6000000-0000-4000-8000-000000000001', 'f5000000-0000-4000-8000-000000000001', 'Punkt'),
+  ('f6000000-0000-4000-8000-000000000002', 'f5000000-0000-4000-8000-000000000001', 'Noch ein Punkt'),
+  ('f6000000-0000-4000-8000-000000000003', 'f5000000-0000-4000-8000-000000000002', 'Fremder Abschnitt');
+insert into public.section_items (id, section_id, parent_id, title) values
+  ('f6000000-0000-4000-8000-000000000004', 'f5000000-0000-4000-8000-000000000001', 'f6000000-0000-4000-8000-000000000001', 'Unterpunkt');
+
+do $$
+declare
+  editor jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000002');
+  stranger jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000005');
+  S1 constant text := '''f5000000-0000-4000-8000-000000000001''';
+  ITEM constant text := '''f6000000-0000-4000-8000-000000000001''';
+  ITEM2 constant text := '''f6000000-0000-4000-8000-000000000002''';
+  OTHER constant text := '''f6000000-0000-4000-8000-000000000003''';
+  SUB constant text := '''f6000000-0000-4000-8000-000000000004''';
+begin
+  perform pg_temp.check('editor', editor, 'Unterpunkt: anlegen', 'can', 'insert into public.section_items (section_id, parent_id, title) values (' || S1 || ', ' || ITEM || ', ''Neu'')');
+  perform pg_temp.check('editor', editor, 'Unterpunkt: Punkt einrücken', 'can', 'update public.section_items set parent_id = ' || ITEM || ' where id = ' || ITEM2);
+  perform pg_temp.check('editor', editor, 'Unterpunkt: wieder eigene Ebene', 'can', 'update public.section_items set parent_id = null where id = ' || SUB);
+  perform pg_temp.check('stranger', stranger, 'Unterpunkt: Fremde verboten', 'cannot', 'insert into public.section_items (section_id, parent_id, title) values (' || S1 || ', ' || ITEM || ', ''Neu'')');
+  perform pg_temp.check('editor', editor, 'Unterpunkt: keine zweite Ebene', 'cannot', 'insert into public.section_items (section_id, parent_id, title) values (' || S1 || ', ' || SUB || ', ''Neu'')');
+  perform pg_temp.check('editor', editor, 'Unterpunkt: Punkt mit Unterpunkten nicht einrückbar', 'cannot', 'update public.section_items set parent_id = ' || ITEM2 || ' where id = ' || ITEM);
+  perform pg_temp.check('editor', editor, 'Unterpunkt: nicht unter sich selbst', 'cannot', 'update public.section_items set parent_id = id where id = ' || ITEM2);
+  perform pg_temp.check('editor', editor, 'Unterpunkt: nicht aus anderem Abschnitt', 'cannot', 'update public.section_items set parent_id = ' || OTHER || ' where id = ' || ITEM2);
+  perform pg_temp.check('editor', editor, 'Unterpunkt: fällt mit dem Punkt weg', 'can', 'with d as (delete from public.section_items where id = ' || ITEM || ' returning 1) select 1 from d');
+end
+$$;
+delete from public.section_items where id = 'f6000000-0000-4000-8000-000000000001';
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Unterpunkt: Löschen des Punkts entfernt ihn', count(*) = 0, 'rows=' || count(*) from public.section_items where id = 'f6000000-0000-4000-8000-000000000004';
+
 select actor, label, passed, detail from rls_results order by n;
 
 rollback;

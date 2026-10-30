@@ -165,7 +165,7 @@ export const TOOLS: Tool<ToolContext>[] = [
       const [assignees, labels, sections, comments, files, kb] = await Promise.all([
         rows(ctx.db.from('task_assignees').select('user_id').eq('task_id', tid), 'Zuweisungen laden'),
         rows(ctx.db.from('task_labels').select('labels(id, name, color)').eq('task_id', tid), 'Labels laden'),
-        rows(ctx.db.from('task_sections').select('id, title, description, due_date, section_items(id, title, done, position)').eq('task_id', tid).order('position'), 'Abschnitte laden'),
+        rows(ctx.db.from('task_sections').select('id, title, description, due_date, section_items(id, parent_id, title, done, position)').eq('task_id', tid).order('position'), 'Abschnitte laden'),
         rows(ctx.db.from('comments').select('id, body, author_user_id, guest_name, created_at').eq('task_id', tid).order('created_at'), 'Kommentare laden'),
         rows(ctx.db.from('task_files').select('id, name, mime_type, size_bytes').eq('task_id', tid), 'Dateien laden'),
         rows(ctx.db.from('task_attachments').select('kb_files(id, name)').eq('task_id', tid), 'Anhänge laden'),
@@ -209,7 +209,7 @@ export const TOOLS: Tool<ToolContext>[] = [
       title: text('Titel', 300),
       planner_id: id('Planner; leer = dein Eingang'),
       bucket_id: id('Bucket im Planner'),
-      description: text('Beschreibung', 50000),
+      description: text('Beschreibung als Markdown', 50000),
       status: { type: 'string', enum: STATUS },
       priority: { type: 'string', enum: PRIORITY },
       start_date: { type: 'string', format: 'date' },
@@ -235,7 +235,7 @@ export const TOOLS: Tool<ToolContext>[] = [
     inputSchema: schema({
       task_id: id('Task'),
       title: text('Titel', 300),
-      description: text('Beschreibung', 50000),
+      description: text('Beschreibung als Markdown', 50000),
       status: { type: 'string', enum: STATUS },
       priority: { type: 'string', enum: PRIORITY },
       start_date: nullableDate('Startdatum'),
@@ -310,7 +310,7 @@ export const TOOLS: Tool<ToolContext>[] = [
     description: 'Schreibt einen Kommentar in deinem Namen. Erwähnte Personen bekommen eine Mail.',
     inputSchema: schema({
       task_id: id('Task'),
-      body: text('Text', 10000),
+      body: text('Text als Markdown', 10000),
       mentions: { type: 'array', items: { type: 'string', format: 'uuid' }, description: 'User-IDs der Erwähnten' },
     }, ['task_id', 'body']),
     run: async (args, ctx) => {
@@ -332,14 +332,14 @@ export const TOOLS: Tool<ToolContext>[] = [
     name: 'create_section',
     title: 'Abschnitt erstellen',
     description: 'Fügt einem Task einen Abschnitt hinzu.',
-    inputSchema: schema({ task_id: id('Task'), title: text('Titel', 200), description: text('Beschreibung', 20000), due_date: { type: 'string', format: 'date' } }, ['task_id', 'title']),
+    inputSchema: schema({ task_id: id('Task'), title: text('Titel', 200), description: text('Beschreibung als Markdown', 20000), due_date: { type: 'string', format: 'date' } }, ['task_id', 'title']),
     run: (args, ctx) => single(ctx.db.from('task_sections').insert(patchOf(args, ['task_id', 'title', 'description', 'due_date'])).select('*'), 'Abschnitt erstellen'),
   },
   {
     name: 'update_section',
     title: 'Abschnitt ändern',
     description: 'Ändert Titel, Beschreibung oder Fälligkeit eines Abschnitts.',
-    inputSchema: schema({ section_id: id('Abschnitt'), title: text('Titel', 200), description: text('Beschreibung', 20000), due_date: nullableDate('Fälligkeit') }, ['section_id']),
+    inputSchema: schema({ section_id: id('Abschnitt'), title: text('Titel', 200), description: text('Beschreibung als Markdown', 20000), due_date: nullableDate('Fälligkeit') }, ['section_id']),
     run: (args, ctx) => single(ctx.db.from('task_sections').update(patchOf(args, ['title', 'description', 'due_date'])).eq('id', args.section_id as string).select('*'), 'Abschnitt ändern'),
   },
   {
@@ -356,16 +356,16 @@ export const TOOLS: Tool<ToolContext>[] = [
   {
     name: 'create_section_item',
     title: 'Punkt erstellen',
-    description: 'Fügt einem Abschnitt einen Punkt hinzu.',
-    inputSchema: schema({ section_id: id('Abschnitt'), title: text('Text', 300) }, ['section_id', 'title']),
-    run: (args, ctx) => single(ctx.db.from('section_items').insert({ section_id: args.section_id, title: args.title }).select('*'), 'Punkt erstellen'),
+    description: 'Fügt einem Abschnitt einen Punkt oder Unterpunkt hinzu.',
+    inputSchema: schema({ section_id: id('Abschnitt'), title: text('Text', 300), parent_id: id('Übergeordneter Punkt: macht daraus einen Unterpunkt (nur eine Ebene)') }, ['section_id', 'title']),
+    run: (args, ctx) => single(ctx.db.from('section_items').insert(patchOf(args, ['section_id', 'title', 'parent_id'])).select('*'), 'Punkt erstellen'),
   },
   {
     name: 'update_section_item',
     title: 'Punkt ändern',
-    description: 'Ändert den Text eines Punkts oder hakt ihn ab.',
-    inputSchema: schema({ item_id: id('Punkt'), title: text('Text', 300), done: { type: 'boolean' } }, ['item_id']),
-    run: (args, ctx) => single(ctx.db.from('section_items').update(patchOf(args, ['title', 'done'])).eq('id', args.item_id as string).select('*'), 'Punkt ändern'),
+    description: 'Ändert den Text eines Punkts, hakt ihn ab oder macht ihn zum Unterpunkt (parent_id, null = eigene Ebene).',
+    inputSchema: schema({ item_id: id('Punkt'), title: text('Text', 300), done: { type: 'boolean' }, parent_id: { type: ['string', 'null'], format: 'uuid', description: 'Übergeordneter Punkt' } }, ['item_id']),
+    run: (args, ctx) => single(ctx.db.from('section_items').update(patchOf(args, ['title', 'done', 'parent_id'])).eq('id', args.item_id as string).select('*'), 'Punkt ändern'),
   },
   {
     name: 'delete_section_item',

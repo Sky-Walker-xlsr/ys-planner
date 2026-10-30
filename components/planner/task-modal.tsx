@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ArrowRightToLine, Calendar, Check, ChevronDown, ChevronRight, FileText, GripVertical, ImageIcon, Link2, Paperclip, Plus, Trash2, Upload, X } from 'lucide-react'
+import { ArrowRightToLine, Calendar, Check, CornerDownRight, ChevronDown, ChevronRight, FileText, GripVertical, ImageIcon, Link2, Paperclip, Plus, Trash2, Upload, X } from 'lucide-react'
 import { usePlanner, positionBetween, sortByPosition, useTaskIndex } from '@/lib/store/planner-store'
 import { Modal } from '@/components/ui/modal'
 import { UserAvatar, shortName } from '@/components/ui/avatar'
@@ -17,6 +17,7 @@ import { PRIORITY_LABEL, STATUS_LABEL, type KbFile, type SectionItem, type TaskF
 import { taskFileUrl } from '@/lib/file-urls'
 import { highlight, normalize, searchTerms } from '@/lib/search'
 import { Marked } from './kb-search'
+import { FormatToolbar, GrowingTextarea, handleFormatShortcut, Markdown, RichTextField } from '@/components/ui/rich-text'
 import { MoveTaskDialog } from './move-task-dialog'
 import { useActions } from './use-actions'
 
@@ -192,46 +193,18 @@ function TitleField({ taskId, value, disabled }: { taskId: string; value: string
   )
 }
 
-/**
- * Textfeld, das mit dem Inhalt wächst: Eine unsichtbare Kopie im selben Grid-Feld gibt die Höhe vor,
- * das Popup scrollt dann als Ganzes.
- */
-function GrowingTextarea({ className, mirrorStyle, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
-  value: string
-  className: string
-  /** Für .input: Die Klasse legt für Nicht-Textareas eine feste Höhe fest */
-  mirrorStyle?: React.CSSProperties
-}) {
-  return (
-    <div className="grid min-w-0">
-      <div aria-hidden className={`${className} invisible whitespace-pre-wrap break-words [grid-area:1/1]`} style={mirrorStyle}>
-        {props.value + '\n'}
-      </div>
-      <textarea {...props} className={`${className} resize-none overflow-hidden [grid-area:1/1]`} />
-    </div>
-  )
-}
-
-const INPUT_MIRROR: React.CSSProperties = { height: 'auto', paddingBlock: '0.5rem' }
-
 function DescriptionField({ taskId, value, disabled }: { taskId: string; value: string; disabled: boolean }) {
   const actions = useActions()
-  const d = useDraft(value)
   return (
-    <GrowingTextarea
+    <RichTextField
       id="task-desc"
-      className="input min-h-24"
-      mirrorStyle={INPUT_MIRROR}
+      boxed
       rows={4}
+      label="Beschreibung"
       disabled={disabled}
-      placeholder={disabled ? '' : 'Beschreibung hinzufügen'}
-      value={d.text}
-      onFocus={d.start}
-      onChange={(e) => d.setDraft(e.target.value)}
-      onBlur={() => {
-        if (d.text !== value) void actions.updateTask(taskId, { description: d.text })
-        d.end()
-      }}
+      placeholder="Beschreibung hinzufügen"
+      value={value}
+      onSave={(description) => void actions.updateTask(taskId, { description })}
     />
   )
 }
@@ -430,18 +403,25 @@ function Sections({ taskId, sections, itemsDone, itemsTotal }: { taskId: string;
   )
 }
 
+/** Wo gerade ein neuer Punkt eingegeben wird */
+type NewItemSlot = { parentId: string | null; afterId: string | null }
+
 function SectionBox({ section }: { section: TaskSection }) {
   const { state, canEdit } = usePlanner()
   const actions = useActions()
   const [open, setOpen] = useState(true)
   const titleDraft = useDraft(section.title)
-  const descriptionDraft = useDraft(section.description)
   const [newItem, setNewItem] = useState('')
-  const [addingItem, setAddingItem] = useState(false)
+  const [slot, setSlot] = useState<NewItemSlot | null>(null)
+  const [focusItem, setFocusItem] = useState<string | null>(null)
+  // Enter und Tab verschieben das Eingabefeld: Das dabei ausgelöste Blur darf es nicht schliessen
+  const keepOpen = useRef(false)
   const items = useMemo(
     () => sortByPosition(Object.values(state.data.section_items).filter((i) => i.section_id === section.id)),
     [state.data.section_items, section.id],
   )
+  const top = useMemo(() => items.filter((i) => !i.parent_id), [items])
+  const childrenOf = (id: string) => items.filter((i) => i.parent_id === id)
   const done = items.filter((i) => i.done).length
   const allDone = items.length > 0 && done === items.length
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({ id: section.id, disabled: !canEdit })
@@ -450,19 +430,84 @@ function SectionBox({ section }: { section: TaskSection }) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
+  // Nur innerhalb derselben Ebene; in andere Ebenen geht es mit Tab und Shift+Tab
   async function onItemDragEnd(e: DragEndEvent) {
     if (!e.over || e.active.id === e.over.id) return
-    const from = items.findIndex((i) => i.id === e.active.id)
-    const to = items.findIndex((i) => i.id === e.over!.id)
-    const rest = items.filter((_, i) => i !== from)
-    await actions.updateItem(String(e.active.id), { position: positionBetween(rest[to - 1]?.position, rest[to]?.position) })
+    const active = state.data.section_items[String(e.active.id)]
+    const over = state.data.section_items[String(e.over.id)]
+    if (!active || !over || (active.parent_id ?? null) !== (over.parent_id ?? null)) return
+    const siblings = items.filter((i) => (i.parent_id ?? null) === (active.parent_id ?? null))
+    const from = siblings.findIndex((i) => i.id === active.id)
+    const to = siblings.findIndex((i) => i.id === over.id)
+    const rest = siblings.filter((_, i) => i !== from)
+    await actions.updateItem(active.id, { position: positionBetween(rest[to - 1]?.position, rest[to]?.position) })
   }
 
-  async function addItem() {
+  function moveSlot(next: NewItemSlot | null) {
+    keepOpen.current = true
+    setSlot(next)
+    requestAnimationFrame(() => { keepOpen.current = false })
+  }
+
+  /** Speichert den Punkt und bleibt direkt beim Eingeben des nächsten */
+  function submitNew() {
     const v = newItem.trim()
+    if (!slot || !v) return moveSlot(null)
+    const id = crypto.randomUUID()
     setNewItem('')
-    if (v) await actions.createItem(section.id, v)
-    else setAddingItem(false)
+    void actions.createItem(section.id, v, { id, parentId: slot.parentId, afterId: slot.afterId })
+    moveSlot({ parentId: slot.parentId, afterId: id })
+  }
+
+  function onNewItemKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!slot) return
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      submitNew()
+    } else if (e.key === 'Escape') {
+      moveSlot(null)
+    } else if (e.key === 'Tab' && !e.shiftKey && !slot.parentId) {
+      // Unter den Punkt davor einrücken
+      const parent = slot.afterId ?? top.at(-1)?.id
+      if (parent) {
+        e.preventDefault()
+        moveSlot({ parentId: parent, afterId: null })
+      }
+    } else if (e.key === 'Tab' && e.shiftKey && slot.parentId) {
+      e.preventDefault()
+      moveSlot({ parentId: null, afterId: slot.parentId })
+    }
+  }
+
+  const newItemInput = (
+    <input className="input mt-1 h-7" autoFocus aria-label={slot?.parentId ? 'Neuer Unterpunkt' : 'Neuer Punkt'}
+      placeholder={slot?.parentId ? 'Neuer Unterpunkt · Shift+Tab: eine Ebene höher' : 'Neuer Punkt · Enter: nächster, Tab: Unterpunkt'}
+      value={newItem} onChange={(e) => setNewItem(e.target.value)}
+      onKeyDown={onNewItemKey}
+      onBlur={() => {
+        if (keepOpen.current) return
+        if (newItem.trim() && slot) {
+          void actions.createItem(section.id, newItem.trim(), { parentId: slot.parentId, afterId: slot.afterId })
+          setNewItem('')
+        }
+        setSlot(null)
+      }} />
+  )
+  const slotIs = (parentId: string | null, afterId: string | null) => slot?.parentId === parentId && slot.afterId === afterId
+
+  function indent(item: SectionItem) {
+    const at = top.findIndex((i) => i.id === item.id)
+    if (at < 1 || childrenOf(item.id).length) return
+    const parent = top[at - 1]
+    setFocusItem(item.id)
+    void actions.updateItem(item.id, { parent_id: parent.id, position: positionBetween(childrenOf(parent.id).at(-1)?.position, undefined) })
+  }
+
+  function outdent(item: SectionItem) {
+    if (!item.parent_id) return
+    const at = top.findIndex((i) => i.id === item.parent_id)
+    setFocusItem(item.id)
+    void actions.updateItem(item.id, { parent_id: null, position: positionBetween(top[at]?.position, top[at + 1]?.position) })
   }
 
   return (
@@ -510,39 +555,51 @@ function SectionBox({ section }: { section: TaskSection }) {
       </div>
       {open && (
         <div className="border-t border-line px-3 py-2">
-          {(canEdit || section.description) && (
-            <div className="mb-2">
-              <GrowingTextarea
-                className="w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm outline-none hover:border-line focus:border-accent disabled:hover:border-transparent"
-                aria-label={`Beschreibung des Abschnitts ${section.title}`}
-                rows={1}
-                disabled={!canEdit}
-                placeholder="Beschreibung hinzufügen"
-                value={descriptionDraft.text}
-                onFocus={descriptionDraft.start}
-                onChange={(e) => descriptionDraft.setDraft(e.target.value)}
-                onBlur={() => {
-                  if (descriptionDraft.text !== section.description) void actions.updateSection(section.id, { description: descriptionDraft.text })
-                  descriptionDraft.end()
-                }}
-              />
-            </div>
-          )}
+          <div className="mb-2">
+            <RichTextField
+              label={`Beschreibung des Abschnitts ${section.title}`}
+              disabled={!canEdit}
+              placeholder="Beschreibung hinzufügen"
+              value={section.description}
+              onSave={(description) => void actions.updateSection(section.id, { description })}
+            />
+          </div>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onItemDragEnd}>
-            <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+            <SortableContext items={top.map((i) => i.id)} strategy={verticalListSortingStrategy}>
               <ul className="flex flex-col">
-                {items.map((i) => <ItemRow key={i.id} item={i} />)}
+                {top.map((i) => {
+                  const children = childrenOf(i.id)
+                  return (
+                    <ItemRow key={i.id} item={i} autoFocus={focusItem === i.id}
+                      onEnter={() => moveSlot({ parentId: null, afterId: i.id })}
+                      onAddChild={() => moveSlot({ parentId: i.id, afterId: children.at(-1)?.id ?? null })}
+                      onIndent={() => indent(i)}
+                    >
+                      {(children.length > 0 || slot?.parentId === i.id) && (
+                        <SortableContext items={children.map((c) => c.id)} strategy={verticalListSortingStrategy}>
+                          <ul className="ml-6 flex flex-col">
+                            {slotIs(i.id, null) && <li>{newItemInput}</li>}
+                            {children.map((c) => (
+                              <ItemRow key={c.id} item={c} autoFocus={focusItem === c.id}
+                                onEnter={() => moveSlot({ parentId: i.id, afterId: c.id })}
+                                onOutdent={() => outdent(c)}
+                              >
+                                {slotIs(i.id, c.id) && newItemInput}
+                              </ItemRow>
+                            ))}
+                          </ul>
+                        </SortableContext>
+                      )}
+                      {slotIs(null, i.id) && newItemInput}
+                    </ItemRow>
+                  )
+                })}
               </ul>
             </SortableContext>
           </DndContext>
           {canEdit &&
-            (addingItem ? (
-              <input className="input mt-1 h-7" autoFocus placeholder="Neuer Punkt" aria-label="Neuer Punkt"
-                value={newItem} onChange={(e) => setNewItem(e.target.value)}
-                onBlur={() => { void addItem(); setAddingItem(false) }}
-                onKeyDown={(e) => { if (e.key === 'Enter') void addItem(); if (e.key === 'Escape') setAddingItem(false) }} />
-            ) : (
-              <button type="button" className="btn-text h-7" onClick={() => setAddingItem(true)}><Plus size={14} /> Punkt hinzufügen</button>
+            (slotIs(null, null) ? newItemInput : (
+              <button type="button" className="btn-text h-7" onClick={() => moveSlot({ parentId: null, afterId: null })}><Plus size={14} /> Punkt hinzufügen</button>
             ))}
         </div>
       )}
@@ -550,49 +607,78 @@ function SectionBox({ section }: { section: TaskSection }) {
   )
 }
 
-function ItemRow({ item }: { item: SectionItem }) {
+function ItemRow({ item, autoFocus, onEnter, onAddChild, onIndent, onOutdent, children }: {
+  item: SectionItem
+  autoFocus?: boolean
+  /** Enter: direkt den nächsten Punkt eingeben */
+  onEnter: () => void
+  onAddChild?: () => void
+  onIndent?: () => void
+  onOutdent?: () => void
+  children?: React.ReactNode
+}) {
   const { canEdit } = usePlanner()
   const actions = useActions()
   const titleDraft = useDraft(item.title)
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({ id: item.id, disabled: !canEdit })
   return (
-    <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={`group flex items-center gap-2 rounded-md py-0.5 ${isDragging ? 'bg-bg opacity-70' : ''}`}>
-      {canEdit && (
-        <button type="button" className="cursor-grab text-text-2 opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label="Punkt verschieben" {...attributes} {...listeners}>
-          <GripVertical size={13} />
+    <li ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }} className={`rounded-md ${isDragging ? 'bg-bg opacity-70' : ''}`}>
+      <div className="group flex items-center gap-2 py-0.5">
+        {canEdit && (
+          <button type="button" className="cursor-grab text-text-2 opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label="Punkt verschieben" {...attributes} {...listeners}>
+            <GripVertical size={13} />
+          </button>
+        )}
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={item.done}
+          aria-label={`${item.title} erledigt`}
+          disabled={!canEdit}
+          onClick={() => void actions.updateItem(item.id, { done: !item.done })}
+          className={`flex size-4 shrink-0 items-center justify-center rounded border cursor-pointer disabled:cursor-default ${item.done ? 'border-accent bg-accent text-on-accent' : 'border-text-2'}`}
+        >
+          {item.done && <Check size={12} strokeWidth={3} />}
         </button>
-      )}
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={item.done}
-        aria-label={`${item.title} erledigt`}
-        disabled={!canEdit}
-        onClick={() => void actions.updateItem(item.id, { done: !item.done })}
-        className={`flex size-4 shrink-0 items-center justify-center rounded border cursor-pointer disabled:cursor-default ${item.done ? 'border-accent bg-accent text-on-accent' : 'border-text-2'}`}
-      >
-        {item.done && <Check size={12} strokeWidth={3} />}
-      </button>
-      <input
-        aria-label="Punkt"
-        disabled={!canEdit}
-        className={`min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 text-sm outline-none hover:border-line focus:border-accent disabled:hover:border-transparent ${item.done ? 'text-text-2 line-through' : ''}`}
-        value={titleDraft.text}
-        onFocus={titleDraft.start}
-        onChange={(e) => titleDraft.setDraft(e.target.value)}
-        onBlur={() => {
-          const v = titleDraft.text.trim()
-          if (v && v !== item.title) void actions.updateItem(item.id, { title: v })
-          titleDraft.end()
-        }}
-        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-      />
-      {canEdit && (
-        <button type="button" className="btn-icon size-6 opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label="Punkt löschen" onClick={() => void actions.deleteItem(item.id)}>
-          <X size={13} />
-        </button>
-      )}
+        <input
+          aria-label="Punkt"
+          autoFocus={autoFocus}
+          disabled={!canEdit}
+          className={`min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 text-sm outline-none hover:border-line focus:border-accent disabled:hover:border-transparent ${item.done ? 'text-text-2 line-through' : ''}`}
+          value={titleDraft.text}
+          onFocus={titleDraft.start}
+          onChange={(e) => titleDraft.setDraft(e.target.value)}
+          onBlur={() => {
+            const v = titleDraft.text.trim()
+            if (v && v !== item.title) void actions.updateItem(item.id, { title: v })
+            titleDraft.end()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              ;(e.target as HTMLInputElement).blur()
+              onEnter()
+            } else if (e.key === 'Tab' && !e.shiftKey && onIndent) {
+              e.preventDefault()
+              onIndent()
+            } else if (e.key === 'Tab' && e.shiftKey && onOutdent) {
+              e.preventDefault()
+              onOutdent()
+            }
+          }}
+        />
+        {canEdit && onAddChild && (
+          <button type="button" className="btn-icon size-6 opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label="Unterpunkt hinzufügen" title="Unterpunkt hinzufügen" onClick={onAddChild}>
+            <CornerDownRight size={13} />
+          </button>
+        )}
+        {canEdit && (
+          <button type="button" className="btn-icon size-6 opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label="Punkt löschen" onClick={() => void actions.deleteItem(item.id)}>
+            <X size={13} />
+          </button>
+        )}
+      </div>
+      {children}
     </li>
   )
 }
@@ -890,8 +976,8 @@ function Comments({ taskId }: { taskId: string }) {
                       </button>
                     )}
                   </div>
-                  <div className="mt-1 whitespace-pre-wrap break-words rounded-lg rounded-tl-sm border border-line bg-surface px-3 py-2 text-sm">
-                    <CommentBody body={c.body} mentionNames={c.mentions.map((id) => state.users[id]?.display_name).filter(Boolean) as string[]} />
+                  <div className="mt-1 break-words rounded-lg rounded-tl-sm border border-line bg-surface px-3 py-2 text-sm">
+                    <Markdown text={c.body} mentions={c.mentions.map((id) => state.users[id]?.display_name).filter(Boolean) as string[]} />
                   </div>
                 </div>
               </li>
@@ -915,6 +1001,7 @@ function Comments({ taskId }: { taskId: string }) {
             </ul>
           )}
           <label htmlFor="comment-input" className="sr-only">Kommentar</label>
+          <FormatToolbar target={ref} onChange={onInput} />
           <textarea
             id="comment-input"
             ref={ref}
@@ -923,6 +1010,7 @@ function Comments({ taskId }: { taskId: string }) {
             value={body}
             onChange={(e) => onInput(e.target.value)}
             onKeyDown={(e) => {
+              if (handleFormatShortcut(e, onInput)) return
               if (suggestions.length) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => (a + 1) % suggestions.length) }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => (a - 1 + suggestions.length) % suggestions.length) }
@@ -941,22 +1029,5 @@ function Comments({ taskId }: { taskId: string }) {
         <p className="border-t border-line px-4 py-3 text-xs text-text-2">Nur Bearbeiter können kommentieren.</p>
       )}
     </div>
-  )
-}
-
-function CommentBody({ body, mentionNames }: { body: string; mentionNames: string[] }) {
-  if (!mentionNames.length) return <>{body}</>
-  const escaped = mentionNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-  const parts = body.split(new RegExp(`(@(?:${escaped.join('|')}))`, 'g'))
-  return (
-    <>
-      {parts.map((p, i) =>
-        p.startsWith('@') && mentionNames.includes(p.slice(1)) ? (
-          <span key={i} className="rounded bg-accent-soft px-0.5 font-medium text-accent-soft-text">{p}</span>
-        ) : (
-          <span key={i}>{p}</span>
-        ),
-      )}
-    </>
   )
 }

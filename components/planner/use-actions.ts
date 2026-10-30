@@ -211,11 +211,16 @@ export function useActions() {
         )
       },
 
-      createItem(sectionId: string, title: string) {
-        const last = sortByPosition(Object.values(state.data.section_items).filter((i) => i.section_id === sectionId)).at(-1)
+      /** afterId: neuer Punkt direkt danach, sonst am Ende seiner Ebene */
+      createItem(sectionId: string, title: string, opts: { id?: string; parentId?: string | null; afterId?: string | null } = {}) {
+        const parentId = opts.parentId ?? null
+        const siblings = sortByPosition(Object.values(state.data.section_items).filter((i) => i.section_id === sectionId && (i.parent_id ?? null) === parentId))
+        const at = opts.afterId ? siblings.findIndex((i) => i.id === opts.afterId) : -1
+        const prev = at >= 0 ? siblings[at] : siblings.at(-1)
+        const next = at >= 0 ? siblings[at + 1] : undefined
         const item: SectionItem = {
-          id: crypto.randomUUID(), section_id: sectionId, planner_id: plannerId, title, done: false,
-          position: positionBetween(last?.position, undefined),
+          id: opts.id ?? crypto.randomUUID(), section_id: sectionId, planner_id: plannerId, parent_id: parentId, title, done: false,
+          position: positionBetween(prev?.position, next?.position),
         }
         return mutate(
           () => apply('upsert', 'section_items', [item]),
@@ -233,8 +238,9 @@ export function useActions() {
 
       deleteItem(id: string) {
         const prev = state.data.section_items[id]
+        const children = Object.values(state.data.section_items).filter((i) => i.parent_id === id)
         return mutate(
-          () => apply('delete', 'section_items', [prev]),
+          () => apply('delete', 'section_items', [prev, ...children]),
           () => db.from('section_items').delete().eq('id', id),
         )
       },
