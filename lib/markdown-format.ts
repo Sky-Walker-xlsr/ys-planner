@@ -52,3 +52,16 @@ export function markMentions(text: string, names: string[]) {
   const escaped = [...names].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
   return text.replace(new RegExp(`@(${escaped.join('|')})`, 'g'), (m) => `[${m}](mention:)`)
 }
+
+/** Beschreibung als Klartext für die Vorschau auf der Karte: ohne Markdown-Zeichen, auf einer Zeile */
+export function markdownPreview(text: string, maxLength = 300) {
+  return text
+    .replace(/```[^\n]*\n?/g, '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*(#{1,6}\s+|>\s?|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+\.\s+)/gm, '')
+    .replace(/(\*\*|__|~~|`)/g, '')
+    .replace(/(^|[\s(])[*_]([^*_\n]+)[*_](?=[\s).,!?:;]|$)/g, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength)
+}

@@ -58,6 +58,7 @@ export function useActions() {
           created_by_guest: viewer.kind === 'guest' ? viewer.name : null,
           completed_at: null,
           remind_at: null,
+          show_description: false,
           reminder_sent_at: null,
           created_at: now(),
           updated_at: now(),

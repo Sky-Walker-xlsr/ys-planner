@@ -211,7 +211,7 @@ function Column({
   group: Group
   groupBy: GroupBy
   sortable: boolean
-  /** Eigener Hintergrund: Die Spalte bekommt eine Fläche, damit Titel und Buttons lesbar bleiben */
+  /** Eigener Hintergrund: Die Spalte hat keine Fläche, ein Schein um die Schrift hält Titel und Buttons lesbar */
   onCustomBackground: boolean
   children: React.ReactNode
 }) {
@@ -223,7 +223,7 @@ function Column({
     <section
       ref={sortable ? s.setNodeRef : undefined}
       style={style}
-      className={`flex w-[290px] shrink-0 flex-col gap-2 ${onCustomBackground ? 'rounded-card bg-bg/90 p-2' : ''} ${s.isDragging ? 'opacity-60' : ''}`}
+      className={`flex w-[290px] shrink-0 flex-col gap-2 ${onCustomBackground ? 'on-custom-bg' : ''} ${s.isDragging ? 'opacity-60' : ''}`}
       aria-label={group.title}
     >
       <div className="flex items-center gap-1.5 px-1">

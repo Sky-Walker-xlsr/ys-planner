@@ -241,10 +241,11 @@ export const TOOLS: Tool<ToolContext>[] = [
       start_date: nullableDate('Startdatum'),
       due_date: nullableDate('Fälligkeit'),
       remind_at: { type: ['string', 'null'], format: 'date-time', description: 'Mail-Erinnerung an alle Zugewiesenen' },
+      show_description: { type: 'boolean', description: 'Anfang der Beschreibung auf der Board-Karte anzeigen' },
       bucket_id: id('Bucket im selben Planner'),
     }, ['task_id']),
     run: (args, ctx) => single(
-      ctx.db.from('tasks').update(patchOf(args, ['title', 'description', 'status', 'priority', 'start_date', 'due_date', 'remind_at', 'bucket_id'])).eq('id', args.task_id as string).select('*'),
+      ctx.db.from('tasks').update(patchOf(args, ['title', 'description', 'status', 'priority', 'start_date', 'due_date', 'remind_at', 'show_description', 'bucket_id'])).eq('id', args.task_id as string).select('*'),
       'Task ändern',
     ),
   },

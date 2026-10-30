@@ -45,6 +45,8 @@ export type Task = {
   /** Erinnerung per Mail an alle Zugewiesenen (Eingang: an den Besitzer) */
   remind_at: string | null
   reminder_sent_at: string | null
+  /** Anfang der Beschreibung auf der Board-Karte anzeigen */
+  show_description: boolean
   created_at: string
   updated_at: string
 }

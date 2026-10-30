@@ -117,7 +117,17 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
           </div>
 
           <div className="mt-4">
-            <label htmlFor="task-desc" className="field-label">Beschreibung</label>
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="task-desc" className="field-label">Beschreibung</label>
+              {!inbox && (
+                <Checkbox
+                  label={<span className="text-xs text-text-2">Anfang auf der Karte anzeigen</span>}
+                  checked={task.show_description}
+                  disabled={!canEdit}
+                  onChange={(show_description) => void actions.updateTask(task.id, { show_description })}
+                />
+              )}
+            </div>
             <DescriptionField taskId={task.id} value={task.description} disabled={!canEdit} />
           </div>
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyFormat, markMentions } from './markdown-format'
+import { applyFormat, markdownPreview, markMentions } from './markdown-format'
 
 describe('applyFormat', () => {
   it('umschliesst die Auswahl und behält sie ausgewählt', () => {
@@ -48,5 +48,27 @@ describe('markMentions', () => {
   it('lässt Text ohne Namen unverändert und deutet Sonderzeichen nicht als Muster', () => {
     expect(markMentions('@Anna', [])).toBe('@Anna')
     expect(markMentions('@A.B und @AxB', ['A.B'])).toBe('[@A.B](mention:) und @AxB')
+  })
+})
+
+describe('markdownPreview', () => {
+  it('entfernt Formatierung und behält den Text', () => {
+    expect(markdownPreview('## Titel\n**fett** und *kursiv* und ~~weg~~ und `code`')).toBe('Titel fett und kursiv und weg und code')
+  })
+
+  it('macht aus Links und Listen lesbaren Text', () => {
+    expect(markdownPreview('- [ ] offen\n- [x] fertig\n- Punkt\n1. Eins\n> Zitat\n[Seite](https://x.ch)')).toBe('offen fertig Punkt Eins Zitat Seite')
+  })
+
+  it('lässt normale Zeichen im Text stehen', () => {
+    expect(markdownPreview('snake_case_name und 2*3*4')).toBe('snake_case_name und 2*3*4')
+  })
+
+  it('kürzt lange Texte', () => {
+    expect(markdownPreview('a'.repeat(500))).toHaveLength(300)
+  })
+
+  it('bleibt bei leerem Text leer', () => {
+    expect(markdownPreview('  \n ')).toBe('')
   })
 })

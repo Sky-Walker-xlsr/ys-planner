@@ -9,6 +9,7 @@ import { LabelPill, PrioritySquare, ProgressBar } from '@/components/ui/controls
 import { dueTextClass, formatShort } from '@/lib/dates'
 import { PRIORITY_LABEL } from '@/lib/types'
 import { progressOf } from '@/lib/grouping'
+import { markdownPreview } from '@/lib/markdown-format'
 
 export function TaskCard({ t, onOpen, dragging = false }: { t: TaskDerived; onOpen: () => void; dragging?: boolean }) {
   const { state, canEdit } = usePlanner()
@@ -17,6 +18,7 @@ export function TaskCard({ t, onOpen, dragging = false }: { t: TaskDerived; onOp
   const done = task.status === 'done'
   const strongPrio = task.priority === 'urgent' || task.priority === 'important'
   const pct = Math.round(progressOf(t) * 100)
+  const preview = task.show_description ? markdownPreview(task.description) : ''
 
   return (
     <div
@@ -45,6 +47,7 @@ export function TaskCard({ t, onOpen, dragging = false }: { t: TaskDerived; onOp
         <TaskCheck title={task.title} done={done} disabled={!canEdit} onToggle={() => void actions.updateTask(task.id, { status: toggledStatus(task.status) })} />
         <div className={`min-w-0 flex-1 text-sm font-medium leading-snug ${done ? 'text-text-2 line-through' : ''}`}>{task.title}</div>
       </div>
+      {preview && <p className="mt-1 line-clamp-3 break-words pl-[26px] text-xs text-text-2">{preview}</p>}
 
       {t.sections.length > 0 && (
         <div className="mt-2.5">
