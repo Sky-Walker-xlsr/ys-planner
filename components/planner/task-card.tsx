@@ -2,6 +2,8 @@
 import { Calendar, FileText, MessageSquare, Paperclip } from 'lucide-react'
 import type { TaskDerived } from '@/lib/store/planner-store'
 import { usePlanner } from '@/lib/store/planner-store'
+import { TaskCheck, toggledStatus } from '@/components/ui/task-check'
+import { useActions } from './use-actions'
 import { UserAvatar } from '@/components/ui/avatar'
 import { LabelPill, PrioritySquare, ProgressBar } from '@/components/ui/controls'
 import { dueTextClass, formatShort } from '@/lib/dates'
@@ -9,7 +11,8 @@ import { PRIORITY_LABEL } from '@/lib/types'
 import { progressOf } from '@/lib/grouping'
 
 export function TaskCard({ t, onOpen, dragging = false }: { t: TaskDerived; onOpen: () => void; dragging?: boolean }) {
-  const { state } = usePlanner()
+  const { state, canEdit } = usePlanner()
+  const actions = useActions()
   const task = t.task
   const done = task.status === 'done'
   const strongPrio = task.priority === 'urgent' || task.priority === 'important'
@@ -38,7 +41,10 @@ export function TaskCard({ t, onOpen, dragging = false }: { t: TaskDerived; onOp
           ))}
         </div>
       )}
-      <div className={`text-sm font-medium leading-snug ${done ? 'text-text-2 line-through' : ''}`}>{task.title}</div>
+      <div className="flex items-start gap-2">
+        <TaskCheck title={task.title} done={done} disabled={!canEdit} onToggle={() => void actions.updateTask(task.id, { status: toggledStatus(task.status) })} />
+        <div className={`min-w-0 flex-1 text-sm font-medium leading-snug ${done ? 'text-text-2 line-through' : ''}`}>{task.title}</div>
+      </div>
 
       {t.sections.length > 0 && (
         <div className="mt-2.5">

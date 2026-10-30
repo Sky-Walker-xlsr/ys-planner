@@ -5,7 +5,9 @@ import { ArrowRightToLine, Inbox, Paperclip } from 'lucide-react'
 import { useCurrentUser } from '@/components/app/current-user'
 import { PriorityBadge } from '@/components/ui/controls'
 import { INBOX_DRAG_TYPE } from '@/components/sidebar/sidebar'
+import { TaskCheck, toggledStatus } from '@/components/ui/task-check'
 import { TaskModal } from '@/components/planner/task-modal'
+import { useActions } from '@/components/planner/use-actions'
 import { MoveTaskDialog } from '@/components/planner/move-task-dialog'
 import { PlannerProvider, usePlanner, type Viewer } from '@/lib/store/planner-store'
 import { formatDateTime } from '@/lib/dates'
@@ -23,6 +25,7 @@ export function InboxPage() {
 
 function InboxView() {
   const { state, viewer } = usePlanner()
+  const actions = useActions()
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
@@ -80,6 +83,7 @@ function InboxView() {
                   }}
                   className={`flex flex-wrap items-center gap-3 px-4 py-2.5 hover:bg-bg ${t.status === 'done' ? 'opacity-60' : ''}`}
                 >
+                  <TaskCheck title={t.title} done={t.status === 'done'} onToggle={() => void actions.updateTask(t.id, { status: toggledStatus(t.status) })} />
                   <button type="button" className="min-w-0 flex-1 cursor-pointer text-left" onClick={() => open(t.id)}>
                     <span className={`block truncate text-sm font-medium ${t.status === 'done' ? 'line-through' : ''}`}>{t.title}</span>
                     <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-2">

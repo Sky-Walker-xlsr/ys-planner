@@ -108,7 +108,7 @@ export function SettingsView() {
               <fieldset disabled={!settings.notify_enabled} className="flex flex-col disabled:opacity-60">
                 <legend className="field-label">Benachrichtigen bei</legend>
                 <Checkbox label="Aufgabe zugewiesen" checked={settings.notify_on_assign} onChange={(v) => set('notify_on_assign', v)} />
-                <Checkbox label="Fälligkeit morgen (Aufgabe oder Abschnitt)" checked={settings.notify_on_due} onChange={(v) => set('notify_on_due', v)} />
+                <Checkbox label="Fälligkeit: am Vortag und am Tag selbst (Aufgabe oder Abschnitt)" checked={settings.notify_on_due} onChange={(v) => set('notify_on_due', v)} />
                 <Checkbox label="In Kommentar erwähnt" checked={settings.notify_on_mention} onChange={(v) => set('notify_on_mention', v)} />
                 <Checkbox label="Zu Planner oder Ordner eingeladen" checked={settings.notify_on_invite} onChange={(v) => set('notify_on_invite', v)} />
               </fieldset>

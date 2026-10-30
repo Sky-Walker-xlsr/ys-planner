@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { folderOverrides, recipients, taskUrl } from '@/lib/notify'
-import { groupByAddress } from '@/lib/notify-groups'
+import { dueMail, groupByAddress, type DueWhen } from '@/lib/notify-groups'
 import { sendMail } from '@/lib/mail'
 import { serverEnv } from '@/lib/env'
 import { safeEqual } from '@/lib/auth/crypto'
@@ -11,6 +11,7 @@ const TZ = 'Europe/Zurich'
 
 type TaskRow = {
   id: string
+  due_date: string
   title: string
   status: string
   planner_id: string
@@ -20,13 +21,14 @@ type TaskRow = {
 
 type SectionRow = {
   id: string
+  due_date: string
   title: string
   tasks: TaskRow | null
   section_items: { done: boolean }[]
 }
 
 // Täglich 07:00 Europe/Zurich (Cron Trigger läuft um 05:00 und 06:00 UTC; hier wird die lokale Stunde geprüft).
-// Bündelt pro User alle Aufgaben und Abschnitte, die morgen fällig sind.
+// Bündelt pro User alle Aufgaben und Abschnitte, die heute oder morgen fällig sind.
 export async function POST(req: NextRequest) {
   if (!(await safeEqual(req.headers.get('authorization') ?? '', `Bearer ${serverEnv.cronSecret}`))) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
@@ -35,23 +37,26 @@ export async function POST(req: NextRequest) {
   const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hour12: false }).format(new Date()))
   if (!force && hour !== 7) return NextResponse.json({ skipped: true, hour })
 
-  const tomorrow = addDays(toISODate(new Date(), TZ), 1)
+  const today = toISODate(new Date(), TZ)
+  const tomorrow = addDays(today, 1)
+  const whenOf = (due: string): DueWhen => (due === today ? 'today' : 'tomorrow')
+  const WHEN_LABEL: Record<DueWhen, string> = { today: 'Heute', tomorrow: 'Morgen' }
   const db = createServiceClient()
 
   const [{ data: tasks }, { data: sections }] = await Promise.all([
     db
       .from('tasks')
-      .select('id, title, status, planner_id, planners(name), task_assignees(user_id)')
-      .eq('due_date', tomorrow)
+      .select('id, title, status, due_date, planner_id, planners(name), task_assignees(user_id)')
+      .in('due_date', [today, tomorrow])
       .neq('status', 'done'),
     db
       .from('task_sections')
-      .select('id, title, tasks!inner(id, title, status, planner_id, planners(name), task_assignees(user_id)), section_items(done)')
-      .eq('due_date', tomorrow)
+      .select('id, title, due_date, tasks!inner(id, title, status, due_date, planner_id, planners(name), task_assignees(user_id)), section_items(done)')
+      .in('due_date', [today, tomorrow])
       .neq('tasks.status', 'done'),
   ])
 
-  type Item = { title: string; meta: string; href: string; plannerId: string }
+  type Item = { title: string; meta: string; href: string; plannerId: string; when: DueWhen }
   const perUser = new Map<string, Item[]>()
   const add = (userIds: string[], item: Item) => {
     for (const id of userIds) {
@@ -63,7 +68,8 @@ export async function POST(req: NextRequest) {
   for (const t of (tasks ?? []) as unknown as TaskRow[]) {
     add(t.task_assignees.map((a) => a.user_id), {
       title: t.title,
-      meta: `Aufgabe · ${t.planners?.name ?? ''}`,
+      meta: `${WHEN_LABEL[whenOf(t.due_date)]} · Aufgabe · ${t.planners?.name ?? ''}`,
+      when: whenOf(t.due_date),
       href: taskUrl(t.planner_id, t.id),
       plannerId: t.planner_id,
     })
@@ -75,14 +81,16 @@ export async function POST(req: NextRequest) {
     if (items.length > 0 && items.every((i) => i.done)) continue
     add(t.task_assignees.map((a) => a.user_id), {
       title: `${s.title} (${t.title})`,
-      meta: `Abschnitt · ${t.planners?.name ?? ''}`,
+      meta: `${WHEN_LABEL[whenOf(s.due_date)]} · Abschnitt · ${t.planners?.name ?? ''}`,
+      when: whenOf(s.due_date),
       href: taskUrl(t.planner_id, t.id),
       plannerId: t.planner_id,
     })
   }
 
   const to = await recipients([...perUser.keys()], 'notify_on_due')
-  const dateText = tomorrow.split('-').reverse().join('.')
+  const dotted = (iso: string) => iso.split('-').reverse().join('.')
+  const dates = { today: dotted(today), tomorrow: dotted(tomorrow) }
   // Eigene Adresse pro Ordner: Ein User kann mehrere Mails an verschiedene Adressen bekommen
   const plannerIds = [...new Set([...perUser.values()].flat().map((i) => i.plannerId))]
   const overrides = new Map(await Promise.all(plannerIds.map(async (p) => [p, await folderOverrides([...to.keys()], p)] as const)))
@@ -91,15 +99,12 @@ export async function POST(req: NextRequest) {
     const groups = groupByAddress(perUser.get(userId)!, email, (p) => overrides.get(p)?.get(userId))
     for (const [address, items] of groups) {
       await sendMail(address, {
-        subject: items.length === 1 ? `Morgen fällig: ${items[0].title}` : `Morgen fällig: ${items.length} Einträge`,
-        heading: `Morgen fällig (${dateText})`,
-        paragraphs: ['Diese Aufgaben und Abschnitte sind dir zugewiesen und morgen fällig:'],
-        items,
+        ...dueMail(items, dates),
         cta: { label: 'Meine Aufgaben öffnen', href: `${serverEnv.appUrl}/meine-aufgaben` },
       })
       sent++
     }
   }
 
-  return NextResponse.json({ date: tomorrow, users: perUser.size, sent })
+  return NextResponse.json({ today, tomorrow, users: perUser.size, sent })
 }

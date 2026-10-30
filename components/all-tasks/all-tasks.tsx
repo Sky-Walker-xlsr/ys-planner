@@ -7,6 +7,7 @@ import { MySchedule } from '@/components/my-tasks/my-schedule'
 import { PlannerIcon, UserAvatar } from '@/components/ui/avatar'
 import { Checkbox, LabelPill, Popover, PriorityBadge, Segmented } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
+import { TaskCheck, toggledStatus } from '@/components/ui/task-check'
 import {
   activeFilterCount, filterTasks, GROUPING_LABEL, groupTasks, labelKey, NO_FILTERS, NOBODY,
   type AllTaskFilters, type AllTaskGrouping, type AllTaskRow,
@@ -111,6 +112,19 @@ export function AllTasks() {
     }
   }
 
+  // Abhaken: nur in Plannern mit Bearbeitungsrecht (RLS liefert sonst keine Zeile zurück)
+  async function toggleDone(id: string) {
+    const prev = rows?.find((r) => r.id === id)
+    if (!prev) return
+    const status = toggledStatus(prev.status)
+    setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, status } : r)) ?? rs)
+    const { data, error } = await db.from('tasks').update({ status }).eq('id', id).select('id')
+    if (error || !data?.length) {
+      setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, status: prev.status } : r)) ?? rs)
+      toast(error ? 'Aufgabe konnte nicht geändert werden' : 'Keine Bearbeitungsrechte in diesem Planner')
+    }
+  }
+
   const active = activeFilterCount(filters)
 
   return (
@@ -177,7 +191,7 @@ export function AllTasks() {
                 </h2>
               )}
               <ul className="card divide-y divide-line">
-                {g.rows.map((r) => <TaskRow key={r.id} row={r} users={users} />)}
+                {g.rows.map((r) => <TaskRow key={r.id} row={r} users={users} onToggle={() => void toggleDone(r.id)} />)}
               </ul>
             </section>
           ))}
@@ -187,11 +201,12 @@ export function AllTasks() {
   )
 }
 
-function TaskRow({ row, users }: { row: AllTaskRow; users: Map<string, User> }) {
+function TaskRow({ row, users, onToggle }: { row: AllTaskRow; users: Map<string, User>; onToggle: () => void }) {
   const labels = row.task_labels.flatMap((l) => (l.labels ? [l.labels] : []))
   return (
     <li>
       <Link href={`/p/${row.planner_id}?task=${row.id}`} className="flex flex-wrap items-center gap-3 px-4 py-2.5 hover:bg-bg">
+        <TaskCheck title={row.title} done={row.status === 'done'} onToggle={onToggle} />
         <span className="min-w-0 flex-1">
           <span className={`block truncate text-sm font-medium ${row.status === 'done' ? 'text-text-2 line-through' : ''}`}>{row.title}</span>
           <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-text-2">

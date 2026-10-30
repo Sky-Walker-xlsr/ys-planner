@@ -7,6 +7,7 @@ import { useCurrentUser } from '@/components/app/current-user'
 import { PlannerIcon } from '@/components/ui/avatar'
 import { PriorityBadge, Segmented, Switch } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
+import { TaskCheck, toggledStatus } from '@/components/ui/task-check'
 import { MySchedule } from './my-schedule'
 import { getBrowserClient } from '@/lib/supabase/browser'
 import { DUE_BUCKET_LABEL, dueBucket, dueTextClass, formatShort, type DueBucket } from '@/lib/dates'
@@ -108,6 +109,19 @@ export function MyTasks() {
     }
   }
 
+  // Abhaken: nur in Plannern mit Bearbeitungsrecht (RLS liefert sonst keine Zeile zurück)
+  async function toggleDone(id: string) {
+    const prev = rows?.find((r) => r.id === id)
+    if (!prev) return
+    const status = toggledStatus(prev.status)
+    setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, status } : r)) ?? rs)
+    const { data, error } = await db.from('tasks').update({ status }).eq('id', id).select('id')
+    if (error || !data?.length) {
+      setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, status: prev.status } : r)) ?? rs)
+      toast(error ? 'Aufgabe konnte nicht geändert werden' : 'Keine Bearbeitungsrechte in diesem Planner')
+    }
+  }
+
   return (
     <div className="flex flex-1 flex-col overflow-y-auto">
       <header className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-5 py-4">
@@ -137,7 +151,7 @@ export function MyTasks() {
         </div>
         {rows === null && <p className="text-sm text-text-2">Lädt …</p>}
         {rows?.length === 0 && <p className="text-sm text-text-2">Dir sind keine offenen Aufgaben zugewiesen.</p>}
-        {rows !== null && rows.length > 0 && !grouped && <TaskList rows={sorted} />}
+        {rows !== null && rows.length > 0 && !grouped && <TaskList rows={sorted} onToggle={(id) => void toggleDone(id)} />}
         {rows !== null && grouped &&
           GROUPS.map((g) =>
             groups[g].length ? (
@@ -145,7 +159,7 @@ export function MyTasks() {
                 <h2 className={`mb-2 text-sm font-semibold ${g === 'overdue' ? 'text-danger' : ''}`}>
                   {DUE_BUCKET_LABEL[g]} <span className="font-normal text-text-2">· {groups[g].length}</span>
                 </h2>
-                <TaskList rows={groups[g]} />
+                <TaskList rows={groups[g]} onToggle={(id) => void toggleDone(id)} />
               </section>
             ) : null,
           )}
@@ -155,14 +169,15 @@ export function MyTasks() {
   )
 }
 
-function TaskList({ rows }: { rows: Row[] }) {
+function TaskList({ rows, onToggle }: { rows: Row[]; onToggle: (id: string) => void }) {
   return (
     <ul className="card divide-y divide-line">
       {rows.map((r) => (
         <li key={r.id}>
           <Link href={`/p/${r.planner_id}?task=${r.id}`} className="flex flex-wrap items-center gap-3 px-4 py-2.5 hover:bg-bg">
+            <TaskCheck title={r.title} done={r.status === 'done'} onToggle={() => onToggle(r.id)} />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">{r.title}</span>
+              <span className={`block truncate text-sm font-medium ${r.status === 'done' ? 'text-text-2 line-through' : ''}`}>{r.title}</span>
               <span className="mt-0.5 flex items-center gap-1.5 text-xs text-text-2">
                 {r.planners && <PlannerIcon name={r.planners.name} color={r.planners.color} size={14} />}
                 {r.planners?.name} · {STATUS_LABEL[r.status]}

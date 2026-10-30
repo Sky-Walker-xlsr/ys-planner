@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus } from 'lucide-reac
 import { usePlanner, sortByPosition, type TaskDerived } from '@/lib/store/planner-store'
 import { groupTasks, progressOf, type GroupBy } from '@/lib/grouping'
 import { UserAvatar } from '@/components/ui/avatar'
+import { TaskCheck, toggledStatus } from '@/components/ui/task-check'
 import { Checkbox, LabelPill, Popover, PrioritySquare } from '@/components/ui/controls'
 import { dueTextClass } from '@/lib/dates'
 import { PRIORITY_LABEL, STATUS_LABEL, type TaskPriority, type TaskStatus } from '@/lib/types'
@@ -136,6 +137,7 @@ function Row({ t, onOpen }: { t: TaskDerived; onOpen: () => void }) {
           />
         ) : (
           <div className="flex items-center gap-2">
+            <TaskCheck title={task.title} done={done} disabled={!canEdit} onToggle={() => void actions.updateTask(task.id, { status: toggledStatus(task.status) })} />
             <button type="button" onClick={onOpen} className={`truncate text-left font-medium hover:underline cursor-pointer ${done ? 'text-text-2 line-through' : ''}`}>
               {task.title}
             </button>

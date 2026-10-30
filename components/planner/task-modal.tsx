@@ -17,6 +17,7 @@ import { PRIORITY_LABEL, STATUS_LABEL, type KbFile, type SectionItem, type TaskF
 import { taskFileUrl } from '@/lib/file-urls'
 import { highlight, normalize, searchTerms } from '@/lib/search'
 import { Marked } from './kb-search'
+import { TaskCheck, toggledStatus } from '@/components/ui/task-check'
 import { FormatToolbar, GrowingTextarea, handleFormatShortcut, Markdown, RichTextField } from '@/components/ui/rich-text'
 import { MoveTaskDialog } from './move-task-dialog'
 import { useActions } from './use-actions'
@@ -65,7 +66,10 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
     <Modal open onClose={onClose} maxWidth={1080} header={header} bodyClassName="">
       <div className="flex flex-col md:flex-row">
         <div className="min-w-0 flex-1 p-5">
-          <TitleField taskId={task.id} value={task.title} disabled={!canEdit} />
+          <div className="flex items-center gap-2">
+            <TaskCheck title={task.title} done={task.status === 'done'} disabled={!canEdit} onToggle={() => void actions.updateTask(task.id, { status: toggledStatus(task.status) })} />
+            <div className="min-w-0 flex-1"><TitleField taskId={task.id} value={task.title} disabled={!canEdit} /></div>
+          </div>
 
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
             {!inbox && (
