@@ -23,6 +23,7 @@ Planner-Web-App im Stil von MS Planner: Boards mit Buckets, Raster, Zeitplan, Di
 | Ordner-Mail | Pro User und Ordner lässt sich eine eigene Benachrichtigungs-Adresse setzen (Login-Mail oder bestätigte Adresse). Der nächstgelegene Ordner gewinnt, sonst gilt die Adresse aus den Einstellungen. Ob eine Mail rausgeht, bestimmen weiterhin die Einstellungen. |
 | Board-Hintergrund | Persönlich in `user_settings`: Farbe oder Bild (`backgrounds/{user_id}.webp` in R2, Schlüssel nur aus der Session). Bilder werden im Browser auf Full HD und WebP gebracht, der Worker prüft den Dateikopf. |
 | Alle Tasks | `/alle-tasks` zeigt alle Tasks aller sichtbaren Planner (RLS) als Liste oder Zeitplan, unabhängig von Buckets. Filter und Gruppierung laufen im Browser (`lib/all-tasks.ts`). |
+| MCP-Zugang | `/mcp` (Streamable HTTP, zustandslos) für Claude Code, Desktop und Chat. Anmeldung per OAuth 2.1 mit PKCE, Tokens nur gehasht in `mcp_tokens`. Jede Aktion läuft mit dem JWT des Users, RLS prüft wie in der App. Freigaben und das Löschen von Plannern/Ordnern sind nicht verfügbar. Trennen in den Einstellungen. |
 | Benachrichtigungen | Zuweisen, Kommentare und Einladungen laufen über Route-Handler (mit User-JWT, RLS aktiv). Die Mail geht danach per `after()` raus. Fälligkeiten: Cron Trigger. |
 
 ### Entscheidung: eigene JWTs mit Supabase JWT Signing Keys

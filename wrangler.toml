@@ -26,6 +26,12 @@ name = "SHARE_LIMITER"
 namespace_id = "1001"
 simple = { limit = 10, period = 60 }
 
+# Offene OAuth-Endpunkte des MCP-Zugangs (pro IP)
+[[ratelimits]]
+name = "OAUTH_LIMITER"
+namespace_id = "1002"
+simple = { limit = 30, period = 60 }
+
 # Logs im Dashboard (u. a. abgelehnte Mails)
 [observability]
 enabled = true

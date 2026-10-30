@@ -8,6 +8,7 @@ import { getBrowserClient } from '@/lib/supabase/browser'
 import type { UserSettings } from '@/lib/types'
 import { BoardBackgroundCard } from './board-background-card'
 import { MailInboxCard } from './mail-inbox-card'
+import { McpCard } from './mcp-card'
 
 export function SettingsView() {
   const me = useCurrentUser()
@@ -80,6 +81,8 @@ export function SettingsView() {
         </section>
 
         <MailInboxCard />
+
+        <McpCard />
 
         <section className="card p-5" aria-labelledby="theme-title">
           <h2 id="theme-title" className="mb-4 text-sm font-semibold">Darstellung</h2>
