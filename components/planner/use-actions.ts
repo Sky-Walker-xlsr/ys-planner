@@ -182,7 +182,7 @@ export function useActions() {
       createSection(taskId: string, title: string) {
         const last = sortByPosition(Object.values(state.data.task_sections).filter((s) => s.task_id === taskId)).at(-1)
         const section: TaskSection = {
-          id: crypto.randomUUID(), task_id: taskId, planner_id: plannerId, title, due_date: null,
+          id: crypto.randomUUID(), task_id: taskId, planner_id: plannerId, title, description: '', due_date: null,
           position: positionBetween(last?.position, undefined),
         }
         return mutate(

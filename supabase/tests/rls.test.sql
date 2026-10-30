@@ -218,6 +218,7 @@ begin
   perform pg_temp.check('editor', editor, 'Bucket anlegen', 'can', ins_bucket);
   perform pg_temp.check('editor', editor, 'Label anlegen', 'can', ins_label);
   perform pg_temp.check('editor', editor, 'Abschnitt anlegen', 'can', ins_section);
+  perform pg_temp.check('editor', editor, 'Abschnitt: Beschreibung setzen', 'can', 'with s as (insert into public.task_sections (task_id, title, description) values (' || T1 || ', ''S'', ''Text'') returning 1) select * from s');
   perform pg_temp.check('editor', editor, 'Kommentieren', 'can', ins_comment);
   perform pg_temp.check('editor', editor, 'eigenen Kommentar ändern', 'can', upd_editor_comment);
   perform pg_temp.check('editor', editor, 'KB-Datei anlegen', 'can', ins_kb);

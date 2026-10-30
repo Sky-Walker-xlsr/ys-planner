@@ -192,30 +192,47 @@ function TitleField({ taskId, value, disabled }: { taskId: string; value: string
   )
 }
 
+/**
+ * Textfeld, das mit dem Inhalt wächst: Eine unsichtbare Kopie im selben Grid-Feld gibt die Höhe vor,
+ * das Popup scrollt dann als Ganzes.
+ */
+function GrowingTextarea({ className, mirrorStyle, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  value: string
+  className: string
+  /** Für .input: Die Klasse legt für Nicht-Textareas eine feste Höhe fest */
+  mirrorStyle?: React.CSSProperties
+}) {
+  return (
+    <div className="grid min-w-0">
+      <div aria-hidden className={`${className} invisible whitespace-pre-wrap break-words [grid-area:1/1]`} style={mirrorStyle}>
+        {props.value + '\n'}
+      </div>
+      <textarea {...props} className={`${className} resize-none overflow-hidden [grid-area:1/1]`} />
+    </div>
+  )
+}
+
+const INPUT_MIRROR: React.CSSProperties = { height: 'auto', paddingBlock: '0.5rem' }
+
 function DescriptionField({ taskId, value, disabled }: { taskId: string; value: string; disabled: boolean }) {
   const actions = useActions()
   const d = useDraft(value)
   return (
-    // Unsichtbare Kopie im selben Grid-Feld gibt die Höhe vor; das Popup scrollt dann als Ganzes
-    <div className="grid">
-      <div aria-hidden className="input invisible min-h-24 whitespace-pre-wrap break-words [grid-area:1/1]" style={{ height: 'auto', paddingBlock: '0.5rem' }}>
-        {d.text + '\n'}
-      </div>
-      <textarea
-        id="task-desc"
-        className="input min-h-24 resize-none overflow-hidden [grid-area:1/1]"
-        rows={4}
-        disabled={disabled}
-        placeholder={disabled ? '' : 'Beschreibung hinzufügen'}
-        value={d.text}
-        onFocus={d.start}
-        onChange={(e) => d.setDraft(e.target.value)}
-        onBlur={() => {
-          if (d.text !== value) void actions.updateTask(taskId, { description: d.text })
-          d.end()
-        }}
-      />
-    </div>
+    <GrowingTextarea
+      id="task-desc"
+      className="input min-h-24"
+      mirrorStyle={INPUT_MIRROR}
+      rows={4}
+      disabled={disabled}
+      placeholder={disabled ? '' : 'Beschreibung hinzufügen'}
+      value={d.text}
+      onFocus={d.start}
+      onChange={(e) => d.setDraft(e.target.value)}
+      onBlur={() => {
+        if (d.text !== value) void actions.updateTask(taskId, { description: d.text })
+        d.end()
+      }}
+    />
   )
 }
 
@@ -418,6 +435,7 @@ function SectionBox({ section }: { section: TaskSection }) {
   const actions = useActions()
   const [open, setOpen] = useState(true)
   const titleDraft = useDraft(section.title)
+  const descriptionDraft = useDraft(section.description)
   const [newItem, setNewItem] = useState('')
   const [addingItem, setAddingItem] = useState(false)
   const items = useMemo(
@@ -450,7 +468,7 @@ function SectionBox({ section }: { section: TaskSection }) {
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`rounded-card border border-line bg-surface ${isDragging ? 'opacity-60 shadow-lg' : ''}`}>
-      <div className="flex items-center gap-2 px-2 py-2">
+      <div className="flex items-start gap-2 px-2 py-2">
         {canEdit && (
           <button type="button" className="btn-icon size-6 cursor-grab" aria-label="Abschnitt verschieben" {...attributes} {...listeners}>
             <GripVertical size={14} />
@@ -459,20 +477,23 @@ function SectionBox({ section }: { section: TaskSection }) {
         <button type="button" className="btn-icon size-6" aria-expanded={open} aria-label={open ? 'Einklappen' : 'Aufklappen'} onClick={() => setOpen(!open)}>
           {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </button>
-        <input
-          className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold outline-none hover:border-line focus:border-accent disabled:hover:border-transparent"
-          aria-label="Titel des Abschnitts"
-          disabled={!canEdit}
-          value={titleDraft.text}
-          onFocus={titleDraft.start}
-          onChange={(e) => titleDraft.setDraft(e.target.value)}
-          onBlur={() => {
-            const v = titleDraft.text.trim()
-            if (v && v !== section.title) void actions.updateSection(section.id, { title: v })
-            titleDraft.end()
-          }}
-          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-        />
+        <div className="min-w-0 flex-1">
+          <GrowingTextarea
+            className="w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold outline-none hover:border-line focus:border-accent disabled:hover:border-transparent"
+            aria-label="Titel des Abschnitts"
+            rows={1}
+            disabled={!canEdit}
+            value={titleDraft.text}
+            onFocus={titleDraft.start}
+            onChange={(e) => titleDraft.setDraft(e.target.value.replace(/\n/g, ' '))}
+            onBlur={() => {
+              const v = titleDraft.text.trim()
+              if (v && v !== section.title) void actions.updateSection(section.id, { title: v })
+              titleDraft.end()
+            }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLTextAreaElement).blur() } }}
+          />
+        </div>
         {allDone && <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent-soft-text">Erledigt</span>}
         <label className={`flex items-center gap-1 text-xs ${section.due_date ? dueTextClass(section.due_date, allDone) : 'text-text-2'}`}>
           <Calendar size={13} aria-hidden />
@@ -489,6 +510,24 @@ function SectionBox({ section }: { section: TaskSection }) {
       </div>
       {open && (
         <div className="border-t border-line px-3 py-2">
+          {(canEdit || section.description) && (
+            <div className="mb-2">
+              <GrowingTextarea
+                className="w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm outline-none hover:border-line focus:border-accent disabled:hover:border-transparent"
+                aria-label={`Beschreibung des Abschnitts ${section.title}`}
+                rows={1}
+                disabled={!canEdit}
+                placeholder="Beschreibung hinzufügen"
+                value={descriptionDraft.text}
+                onFocus={descriptionDraft.start}
+                onChange={(e) => descriptionDraft.setDraft(e.target.value)}
+                onBlur={() => {
+                  if (descriptionDraft.text !== section.description) void actions.updateSection(section.id, { description: descriptionDraft.text })
+                  descriptionDraft.end()
+                }}
+              />
+            </div>
+          )}
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onItemDragEnd}>
             <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
               <ul className="flex flex-col">

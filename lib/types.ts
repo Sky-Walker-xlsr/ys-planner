@@ -50,7 +50,7 @@ export type Task = {
 }
 export type TaskAssignee = { task_id: string; user_id: string; planner_id: string }
 export type TaskLabel = { task_id: string; label_id: string; planner_id: string }
-export type TaskSection = { id: string; task_id: string; planner_id: string; title: string; due_date: string | null; position: number }
+export type TaskSection = { id: string; task_id: string; planner_id: string; title: string; description: string; due_date: string | null; position: number }
 export type SectionItem = { id: string; section_id: string; planner_id: string; title: string; done: boolean; position: number }
 export type Comment = {
   id: string
