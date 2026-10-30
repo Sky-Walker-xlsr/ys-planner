@@ -1,5 +1,5 @@
 'use client'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCorners, useDroppable, useSensor, useSensors,
   type DragEndEvent, type DragStartEvent,
@@ -17,6 +17,8 @@ import type { TaskPriority, TaskStatus } from '@/lib/types'
 import { TaskCard } from './task-card'
 import { AddTaskInline } from './add-task-inline'
 import { useActions } from './use-actions'
+import { boardBackgroundStyle } from '@/lib/design'
+import type { UserSettings } from '@/lib/types'
 
 /** Legt eine Aufgabe in einer Gruppe an und setzt die passende Eigenschaft */
 export function useAddToGroup(groupBy: GroupBy) {
@@ -48,12 +50,24 @@ const parseCardId = (id: string) => {
   return { groupKey, taskId }
 }
 
+/** Persönlicher Hintergrund aus den Einstellungen (Gäste: Standard) */
+function useBoardBackground() {
+  const { db, viewer } = usePlanner()
+  const [background, setBackground] = useState<Pick<UserSettings, 'board_bg_color' | 'board_bg_image_at'> | null>(null)
+  useEffect(() => {
+    if (viewer.kind !== 'user') return
+    void db.from('user_settings').select('board_bg_color, board_bg_image_at').eq('user_id', viewer.id).maybeSingle().then(({ data }) => setBackground(data))
+  }, [db, viewer])
+  return background
+}
+
 export function Board({ tasks, groupBy, onOpenTask }: { tasks: TaskDerived[]; groupBy: GroupBy; onOpenTask: (id: string) => void }) {
   const { state, members, canEdit } = usePlanner()
   const actions = useActions()
   const addToGroup = useAddToGroup(groupBy)
   const [showDone, setShowDone] = useState<Record<string, boolean>>({})
   const [activeId, setActiveId] = useState<string | null>(null)
+  const background = useBoardBackground()
 
   const buckets = useMemo(() => sortByPosition(Object.values(state.data.buckets)), [state.data.buckets])
   const labels = useMemo(() => Object.values(state.data.labels).sort((a, b) => a.name.localeCompare(b.name)), [state.data.labels])
@@ -141,7 +155,7 @@ export function Board({ tasks, groupBy, onOpenTask }: { tasks: TaskDerived[]; gr
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-      <div className="flex h-full items-start gap-4 overflow-x-auto p-5">
+      <div className="flex h-full items-start gap-4 overflow-x-auto p-5" style={boardBackgroundStyle(background)}>
         <SortableContext
           items={groupBy === 'bucket' ? buckets.map((b) => `bucket:${b.id}`) : []}
           strategy={horizontalListSortingStrategy}
@@ -151,7 +165,7 @@ export function Board({ tasks, groupBy, onOpenTask }: { tasks: TaskDerived[]; gr
             const doneCount = g.tasks.filter((t) => t.task.status === 'done').length
             const collapsible = !(groupBy === 'progress' && g.key === 'done') && doneCount > 0
             return (
-              <Column key={g.key} group={g} groupBy={groupBy} sortable={groupBy === 'bucket' && canEdit}>
+              <Column key={g.key} group={g} groupBy={groupBy} sortable={groupBy === 'bucket' && canEdit} onCustomBackground={!!background?.board_bg_color || !!background?.board_bg_image_at}>
                 {canEdit && <AddTaskInline onAdd={(title) => addToGroup(g.key, title)} />}
                 <SortableContext items={list.map((t) => cardId(g.key, t.task.id))} strategy={verticalListSortingStrategy}>
                   <div className="flex flex-col gap-2">
@@ -191,11 +205,14 @@ function Column({
   group,
   groupBy,
   sortable,
+  onCustomBackground,
   children,
 }: {
   group: Group
   groupBy: GroupBy
   sortable: boolean
+  /** Eigener Hintergrund: Die Spalte bekommt eine Fläche, damit Titel und Buttons lesbar bleiben */
+  onCustomBackground: boolean
   children: React.ReactNode
 }) {
   const { setNodeRef: setDropRef } = useDroppable({ id: `col:${group.key}` })
@@ -206,7 +223,7 @@ function Column({
     <section
       ref={sortable ? s.setNodeRef : undefined}
       style={style}
-      className={`flex w-[290px] shrink-0 flex-col gap-2 ${s.isDragging ? 'opacity-60' : ''}`}
+      className={`flex w-[290px] shrink-0 flex-col gap-2 ${onCustomBackground ? 'rounded-card bg-bg/90 p-2' : ''} ${s.isDragging ? 'opacity-60' : ''}`}
       aria-label={group.title}
     >
       <div className="flex items-center gap-1.5 px-1">

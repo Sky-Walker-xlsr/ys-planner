@@ -6,6 +6,7 @@ import { Checkbox, Switch } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
 import { getBrowserClient } from '@/lib/supabase/browser'
 import type { UserSettings } from '@/lib/types'
+import { BoardBackgroundCard } from './board-background-card'
 import { MailInboxCard } from './mail-inbox-card'
 
 export function SettingsView() {
@@ -20,6 +21,7 @@ export function SettingsView() {
         data ?? {
           user_id: me.id, theme: 'light', notify_enabled: true, notify_email: me.email,
           notify_on_assign: true, notify_on_due: true, notify_on_mention: true, notify_on_invite: true,
+          board_bg_color: null, board_bg_image_at: null,
         },
       )
     })
@@ -86,6 +88,8 @@ export function SettingsView() {
             <ThemeTile label="Dunkel" value="dark" current={settings?.theme} onSelect={setTheme} />
           </div>
         </section>
+
+        {settings && <BoardBackgroundCard settings={settings} onChange={(patch) => setSettings({ ...settings, ...patch })} />}
 
         <section className="card p-5" aria-labelledby="notify-title">
           <h2 id="notify-title" className="mb-4 text-sm font-semibold">E-Mail-Benachrichtigungen</h2>

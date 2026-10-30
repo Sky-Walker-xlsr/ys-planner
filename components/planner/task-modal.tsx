@@ -7,9 +7,10 @@ import { ArrowRightToLine, Calendar, Check, ChevronDown, ChevronRight, FileText,
 import { usePlanner, positionBetween, sortByPosition, useTaskIndex } from '@/lib/store/planner-store'
 import { Modal } from '@/components/ui/modal'
 import { UserAvatar, shortName } from '@/components/ui/avatar'
+import { ColorPicker } from '@/components/ui/color-picker'
 import { Checkbox, LabelPill, Popover } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
-import { LABEL_COLORS, LABEL_COLOR_NAMES, labelStyle } from '@/lib/design'
+import { LABEL_COLORS } from '@/lib/design'
 import { dueChipClass, dueTextClass, formatDateTime, relativeTime, toDateTimeLocal } from '@/lib/dates'
 import { formatBytes } from '@/lib/image'
 import { PRIORITY_LABEL, STATUS_LABEL, type KbFile, type SectionItem, type TaskFile, type Task, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
@@ -329,7 +330,7 @@ function Labels({ taskId, selected }: { taskId: string; selected: string[] }) {
       ))}
       {canEdit && (
         <Popover
-          width={260}
+          width={300}
           trigger={({ toggle }) => (
             <button type="button" className="btn-text h-7" onClick={toggle}><Plus size={14} /> Label</button>
           )}
@@ -347,13 +348,8 @@ function Labels({ taskId, selected }: { taskId: string; selected: string[] }) {
           <form onSubmit={create} className="mt-1 border-t border-line p-1.5 pt-2">
             <label htmlFor="new-label" className="field-label">Neues Label</label>
             <input id="new-label" className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
-            <div className="mt-2 flex gap-1.5" role="radiogroup" aria-label="Farbe">
-              {LABEL_COLORS.map((c) => (
-                <button key={c} type="button" role="radio" aria-checked={color === c} aria-label={LABEL_COLOR_NAMES[c]}
-                  onClick={() => setColor(c)}
-                  className={`size-6 rounded-md cursor-pointer ${color === c ? 'ring-2 ring-accent ring-offset-1 ring-offset-surface' : ''}`}
-                  style={labelStyle(c)} />
-              ))}
+            <div className="mt-2">
+              <ColorPicker id="new-label-color" value={color} onChange={setColor} presets={LABEL_COLORS} />
             </div>
             <button type="submit" className="btn-primary mt-2 w-full" disabled={!name.trim()}>Erstellen</button>
           </form>

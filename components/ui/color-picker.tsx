@@ -5,14 +5,19 @@ import { PLANNER_COLORS } from '@/lib/design'
 const HEX = /^#[0-9a-f]{6}$/i
 
 /** Vorschläge plus freie Wahl: Farbfeld des Browsers oder Hex-Wert von Hand */
-export function ColorPicker({ id, value, onChange }: { id: string; value: string; onChange: (color: string) => void }) {
+export function ColorPicker({ id, value, onChange, presets = PLANNER_COLORS }: {
+  id: string
+  value: string
+  onChange: (color: string) => void
+  presets?: readonly string[]
+}) {
   const [draft, setDraft] = useState<string | null>(null)
   const current = value.toLowerCase()
   const invalid = draft !== null && !HEX.test(draft)
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {PLANNER_COLORS.map((c) => (
+      {presets.map((c) => (
         <button
           key={c}
           type="button"

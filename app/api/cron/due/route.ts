@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { recipients, taskUrl } from '@/lib/notify'
+import { folderOverrides, recipients, taskUrl } from '@/lib/notify'
+import { groupByAddress } from '@/lib/notify-groups'
 import { sendMail } from '@/lib/mail'
 import { serverEnv } from '@/lib/env'
 import { safeEqual } from '@/lib/auth/crypto'
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
       .neq('tasks.status', 'done'),
   ])
 
-  type Item = { title: string; meta: string; href: string }
+  type Item = { title: string; meta: string; href: string; plannerId: string }
   const perUser = new Map<string, Item[]>()
   const add = (userIds: string[], item: Item) => {
     for (const id of userIds) {
@@ -64,6 +65,7 @@ export async function POST(req: NextRequest) {
       title: t.title,
       meta: `Aufgabe · ${t.planners?.name ?? ''}`,
       href: taskUrl(t.planner_id, t.id),
+      plannerId: t.planner_id,
     })
   }
   for (const s of (sections ?? []) as unknown as SectionRow[]) {
@@ -75,22 +77,28 @@ export async function POST(req: NextRequest) {
       title: `${s.title} (${t.title})`,
       meta: `Abschnitt · ${t.planners?.name ?? ''}`,
       href: taskUrl(t.planner_id, t.id),
+      plannerId: t.planner_id,
     })
   }
 
   const to = await recipients([...perUser.keys()], 'notify_on_due')
   const dateText = tomorrow.split('-').reverse().join('.')
+  // Eigene Adresse pro Ordner: Ein User kann mehrere Mails an verschiedene Adressen bekommen
+  const plannerIds = [...new Set([...perUser.values()].flat().map((i) => i.plannerId))]
+  const overrides = new Map(await Promise.all(plannerIds.map(async (p) => [p, await folderOverrides([...to.keys()], p)] as const)))
   let sent = 0
   for (const [userId, email] of to) {
-    const items = perUser.get(userId)!
-    await sendMail(email, {
-      subject: items.length === 1 ? `Morgen fällig: ${items[0].title}` : `Morgen fällig: ${items.length} Einträge`,
-      heading: `Morgen fällig (${dateText})`,
-      paragraphs: ['Diese Aufgaben und Abschnitte sind dir zugewiesen und morgen fällig:'],
-      items,
-      cta: { label: 'Meine Aufgaben öffnen', href: `${serverEnv.appUrl}/meine-aufgaben` },
-    })
-    sent++
+    const groups = groupByAddress(perUser.get(userId)!, email, (p) => overrides.get(p)?.get(userId))
+    for (const [address, items] of groups) {
+      await sendMail(address, {
+        subject: items.length === 1 ? `Morgen fällig: ${items[0].title}` : `Morgen fällig: ${items.length} Einträge`,
+        heading: `Morgen fällig (${dateText})`,
+        paragraphs: ['Diese Aufgaben und Abschnitte sind dir zugewiesen und morgen fällig:'],
+        items,
+        cta: { label: 'Meine Aufgaben öffnen', href: `${serverEnv.appUrl}/meine-aufgaben` },
+      })
+      sent++
+    }
   }
 
   return NextResponse.json({ date: tomorrow, users: perUser.size, sent })

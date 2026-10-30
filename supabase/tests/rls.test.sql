@@ -520,6 +520,58 @@ select set_config('app.task_move', '', true);
 insert into rls_results (actor, label, passed, detail)
 select 'owner', 'Verschieben: Marker ist danach wieder aus', not app.task_moving(), '';
 
+-- Label-Farben, Board-Hintergrund und Ordner-Mail
+insert into public.user_sender_emails (user_id, email, confirmed_at) values
+  ('a0000000-0000-4000-8000-000000000004', 'firma@test.local', now()),
+  ('a0000000-0000-4000-8000-000000000004', 'team@test.local', now()),
+  ('a0000000-0000-4000-8000-000000000004', 'offen@test.local', null);
+
+do $$
+declare
+  FO constant text := '''b0000000-0000-4000-8000-000000000001''';
+  P constant text := '''c0000000-0000-4000-8000-000000000001''';
+  editor jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000002');
+  fmember jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000004');
+  stranger jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000005');
+  ins_override text := 'insert into public.folder_notify_emails (user_id, folder_id, notify_email) values (''a0000000-0000-4000-8000-000000000004'', ' || FO || ', ';
+begin
+  perform pg_temp.check('editor', editor, 'Label-Farbe: Hex erlaubt', 'can', 'insert into public.labels (planner_id, name, color) values (' || P || ', ''Hex'', ''#a1b2c3'')');
+  perform pg_temp.check('editor', editor, 'Label-Farbe: benannte Farbe bleibt gültig', 'can', 'insert into public.labels (planner_id, name, color) values (' || P || ', ''Alt'', ''teal'')');
+  perform pg_temp.check('editor', editor, 'Label-Farbe: kein beliebiger Text', 'cannot', 'insert into public.labels (planner_id, name, color) values (' || P || ', ''Böse'', ''url(https://example.com/x)'')');
+
+  perform pg_temp.check('editor', editor, 'Board-Hintergrund: eigene Hex-Farbe', 'can', 'update public.user_settings set board_bg_color = ''#102030'' where user_id = ''a0000000-0000-4000-8000-000000000002''');
+  perform pg_temp.check('editor', editor, 'Board-Hintergrund: kein beliebiger Text', 'cannot', 'update public.user_settings set board_bg_color = ''url(https://example.com/x)'' where user_id = ''a0000000-0000-4000-8000-000000000002''');
+  perform pg_temp.check('stranger', stranger, 'Board-Hintergrund: fremde Einstellungen tabu', 'cannot', 'update public.user_settings set board_bg_color = ''#102030'' where user_id = ''a0000000-0000-4000-8000-000000000002''');
+
+  perform pg_temp.check('folder', fmember, 'Ordner-Mail: bestätigte Adresse erlaubt', 'can', ins_override || '''firma@test.local'')');
+  perform pg_temp.check('folder', fmember, 'Ordner-Mail: Login-Mail erlaubt', 'can', ins_override || '''folder@test.local'')');
+  perform pg_temp.check('folder', fmember, 'Ordner-Mail: fremde Adresse verboten', 'cannot', ins_override || '''jemand@example.com'')');
+  perform pg_temp.check('folder', fmember, 'Ordner-Mail: unbestätigte Adresse verboten', 'cannot', ins_override || '''offen@test.local'')');
+  perform pg_temp.check('stranger', stranger, 'Ordner-Mail: nicht für unsichtbare Ordner', 'cannot', 'insert into public.folder_notify_emails (user_id, folder_id, notify_email) values (''a0000000-0000-4000-8000-000000000005'', ' || FO || ', ''stranger@test.local'')');
+  perform pg_temp.check('stranger', stranger, 'Ordner-Mail: nicht für andere User', 'cannot', ins_override || '''firma@test.local'')');
+  perform pg_temp.check('folder', fmember, 'Ordner-Mail: Auflösung nur für Service-Role', 'cannot', 'select public.notify_overrides(array[''a0000000-0000-4000-8000-000000000004''::uuid], ' || P || ')');
+end
+$$;
+
+insert into public.folder_notify_emails (user_id, folder_id, notify_email) values
+  ('a0000000-0000-4000-8000-000000000004', 'b0000000-0000-4000-8000-000000000001', 'firma@test.local');
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Ordner-Mail: gilt auch im Unterordner', app.folder_notify_email('a0000000-0000-4000-8000-000000000004', 'c0000000-0000-4000-8000-000000000003') = 'firma@test.local', '';
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Ordner-Mail: Planner ohne Ordner hat keine', app.folder_notify_email('a0000000-0000-4000-8000-000000000004', 'c0000000-0000-4000-8000-000000000002') is null, '';
+insert into public.folder_notify_emails (user_id, folder_id, notify_email) values
+  ('a0000000-0000-4000-8000-000000000004', 'b0000000-0000-4000-8000-000000000002', 'team@test.local');
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Ordner-Mail: nächstgelegener Ordner gewinnt', app.folder_notify_email('a0000000-0000-4000-8000-000000000004', 'c0000000-0000-4000-8000-000000000003') = 'team@test.local', '';
+update public.user_sender_emails set confirmed_at = null where email = 'team@test.local';
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Ordner-Mail: entfernte Bestätigung fällt auf den Elternordner zurück', app.folder_notify_email('a0000000-0000-4000-8000-000000000004', 'c0000000-0000-4000-8000-000000000003') = 'firma@test.local', '';
+insert into public.task_assignees (task_id, user_id) values
+  ('e0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000004') on conflict do nothing;
+update public.tasks set remind_at = now() - interval '1 minute' where id = 'e0000000-0000-4000-8000-000000000001';
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Ordner-Mail: Erinnerung geht an die Ordner-Adresse', count(*) = 1, 'rows=' || count(*) from public.claim_due_task_reminders(10) where email = 'firma@test.local';
+
 select actor, label, passed, detail from rls_results order by n;
 
 rollback;

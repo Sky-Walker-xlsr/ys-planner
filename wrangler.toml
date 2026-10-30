@@ -13,6 +13,7 @@ binding = "ASSETS"
 #   kb/{planner_id}/{kb_file_id}.md
 #   tasks/{task_id}/{file_id}-{dateiname}
 #   inbox/{user_id}/{task_id}/{file_id}-{dateiname}
+#   backgrounds/{user_id}.webp
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "planner-files"

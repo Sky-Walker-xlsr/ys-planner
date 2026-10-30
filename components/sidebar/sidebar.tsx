@@ -15,6 +15,7 @@ import { ColorPicker } from '@/components/ui/color-picker'
 import { Modal } from '@/components/ui/modal'
 import { toast } from '@/components/ui/toast'
 import { FolderShareDialog } from '@/components/share/folder-share-dialog'
+import { FolderNotifyDialog } from '@/components/share/folder-notify-dialog'
 import { PLANNER_COLORS } from '@/lib/design'
 import { childrenByParent, folderOptions, isInSubtree } from '@/lib/folders'
 import { getBrowserClient } from '@/lib/supabase/browser'
@@ -47,6 +48,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [newPlannerOpen, setNewPlannerOpen] = useState(false)
   const [folderDialog, setFolderDialog] = useState<{ mode: 'new'; parentId?: string } | { mode: 'rename'; folder: Folder } | null>(null)
   const [shareFolder, setShareFolder] = useState<Folder | null>(null)
+  const [notifyFolder, setNotifyFolder] = useState<Folder | null>(null)
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -163,6 +165,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                   <MenuItem onClick={() => { close(); setShareFolder(f) }}>
                     {isOwner ? 'Teilen' : 'Mitglieder anzeigen'}
                   </MenuItem>
+                  <MenuItem onClick={() => { close(); setNotifyFolder(f) }}>Benachrichtigungs-Mail</MenuItem>
                   {isOwner && (
                     <>
                       <MenuItem onClick={() => { close(); setFolderDialog({ mode: 'new', parentId: f.id }) }}>Unterordner erstellen</MenuItem>
@@ -303,6 +306,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           }}
         />
       )}
+      {notifyFolder && <FolderNotifyDialog folder={notifyFolder} onClose={() => setNotifyFolder(null)} />}
       {shareFolder && (
         <FolderShareDialog
           folder={shareFolder}

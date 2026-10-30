@@ -12,6 +12,8 @@ export type UserSettings = {
   notify_on_due: boolean
   notify_on_mention: boolean
   notify_on_invite: boolean
+  board_bg_color: string | null
+  board_bg_image_at: string | null
 }
 
 export type Folder = { id: string; owner_id: string; parent_id: string | null; name: string; position: number }

@@ -30,3 +30,9 @@ export function safeFileName(name: string) {
 
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 export const MAX_KB_BYTES = 2 * 1024 * 1024
+
+/** Prüft den Dateikopf: Die Angabe des Browsers (file.type) ist frei wählbar */
+export function isWebp(bytes: Uint8Array) {
+  const ascii = (from: number, to: number) => String.fromCharCode(...bytes.subarray(from, to))
+  return bytes.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP'
+}

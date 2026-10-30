@@ -6,16 +6,26 @@ import { ROLE_LABEL, type Role, type UserSettings } from '@/lib/types'
 
 type SettingFlag = 'notify_on_assign' | 'notify_on_due' | 'notify_on_mention' | 'notify_on_invite'
 
+/** Pro User die eigene Adresse des Ordners, in dem der Planner liegt (nächstgelegener Ordner gewinnt) */
+export async function folderOverrides(userIds: string[], plannerId: string): Promise<Map<string, string>> {
+  const { data, error } = await createServiceClient().rpc('notify_overrides', { user_ids: userIds, p: plannerId })
+  if (error) console.error('Ordner-Adressen konnten nicht geladen werden', error)
+  return new Map(((data ?? []) as { user_id: string; email: string }[]).map((r) => [r.user_id, r.email]))
+}
+
 /** E-Mail-Adressen der User, die für dieses Ereignis Benachrichtigungen wollen */
-export async function recipients(userIds: string[], flag: SettingFlag): Promise<Map<string, string>> {
+export async function recipients(userIds: string[], flag: SettingFlag, plannerId?: string): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   if (!userIds.length) return out
+  const overrides = plannerId ? await folderOverrides(userIds, plannerId) : new Map<string, string>()
   const { data } = await createServiceClient()
     .from('user_settings')
     .select('user_id, notify_enabled, notify_email, notify_on_assign, notify_on_due, notify_on_mention, notify_on_invite')
     .in('user_id', userIds)
   for (const s of (data ?? []) as UserSettings[]) {
-    if (s.notify_enabled && s[flag] && s.notify_email) out.set(s.user_id, s.notify_email)
+    if (!s.notify_enabled || !s[flag]) continue
+    const address = overrides.get(s.user_id) ?? s.notify_email
+    if (address) out.set(s.user_id, address)
   }
   return out
 }
@@ -30,7 +40,7 @@ export async function notifyAssigned(opts: { taskId: string; userId: string; act
   const db = createServiceClient()
   const { data: task } = await db.from('tasks').select('id, title, due_date, planner_id, planners(name)').eq('id', opts.taskId).single()
   if (!task) return
-  const to = (await recipients([opts.userId], 'notify_on_assign')).get(opts.userId)
+  const to = (await recipients([opts.userId], 'notify_on_assign', task.planner_id)).get(opts.userId)
   if (!to) return
   const plannerName = (task.planners as unknown as { name: string } | null)?.name ?? ''
   await sendMail(to, {
@@ -51,7 +61,7 @@ export async function notifyMentioned(opts: { commentId: string; actorId: string
     .single()
   if (!comment) return
   const ids = (comment.mentions as string[]).filter((id) => id !== opts.actorId)
-  const to = await recipients(ids, 'notify_on_mention')
+  const to = await recipients(ids, 'notify_on_mention', comment.planner_id)
   const title = (comment.tasks as unknown as { title: string } | null)?.title ?? ''
   await Promise.all(
     [...to.values()].map((email) =>
@@ -73,7 +83,7 @@ export async function notifyInvited(opts: {
   role: Role
   inviterName: string
 }) {
-  const to = (await recipients([opts.userId], 'notify_on_invite')).get(opts.userId)
+  const to = (await recipients([opts.userId], 'notify_on_invite', opts.kind === 'planner' ? opts.targetId : undefined)).get(opts.userId)
   if (!to) return
   const what = opts.kind === 'planner' ? 'Planner' : 'Ordner'
   await sendMail(to, {

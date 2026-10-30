@@ -183,6 +183,12 @@ begin
    where section_id in (select id from public.task_sections where task_id = t);
   update public.comments set planner_id = p where task_id = t;
   update public.task_files set planner_id = p where task_id = t;
+  -- Fehlende Labels mit derselben Farbe anlegen
+  insert into public.labels (planner_id, name, color)
+  select p, l.name, l.color
+    from public.labels l
+   where l.planner_id = source and l.name = any (label_names)
+     and not exists (select 1 from public.labels x where x.planner_id = p and lower(x.name) = lower(l.name));
   perform app.attach_labels(t, p, label_names);
 
   -- Clients im alten Planner sehen das Update nicht mehr (Realtime filtert auf den neuen Wert)
