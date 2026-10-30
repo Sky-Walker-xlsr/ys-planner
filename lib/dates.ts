@@ -81,6 +81,13 @@ export function formatDateTime(ts: string): string {
   return dateTimeFmt.format(new Date(ts))
 }
 
+/** Zeitstempel als Wert für <input type="datetime-local"> (lokale Zeit des Browsers) */
+export function toDateTimeLocal(ts: string): string {
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${toISODate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 export function relativeTime(ts: string): string {
   const diff = (Date.now() - new Date(ts).getTime()) / 1000
   if (diff < 60) return 'gerade eben'

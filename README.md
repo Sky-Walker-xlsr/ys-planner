@@ -232,6 +232,8 @@ Mails gehen nur raus, wenn in den Einstellungen des Empfängers `notify_enabled`
 
 `worker.ts` umhüllt den OpenNext-Worker und ergänzt einen `scheduled`-Handler. Cloudflare-Crons laufen in UTC, deshalb sind zwei Zeiten konfiguriert: `0 5 * * *` (Sommerzeit) und `0 6 * * *` (Winterzeit). `/api/cron/due` läuft nur, wenn es in Europe/Zurich 07:00 ist. Pro User wird eine gebündelte Mail mit allen morgen fälligen Aufgaben und Abschnitten verschickt.
 
+Der dritte Cron (`*/5 * * * *`) ruft `/api/cron/reminders` auf und verschickt die Erinnerungen aus dem Task-Popup, also auf bis zu 5 Minuten genau. Keine Mail geht raus, wenn der Task erledigt ist, der Zugriff weg ist oder keine Benachrichtigungs-Mail gesetzt ist.
+
 Manuell auslösen (z. B. zum Testen):
 ```bash
 curl -X POST "https://<domain>/api/cron/due?force=1" -H "Authorization: Bearer $CRON_SECRET"
@@ -252,7 +254,7 @@ Siehe `.env.example`.
 | `APP_URL` | var | Öffentliche Basis-URL |
 | `SESSION_SECRET` | secret | Signiert Session- und Gast-Cookies |
 | `SHARE_LINK_SECRET` | secret | Verschlüsselt Share-Link-Tokens (zum erneuten Kopieren) |
-| `CRON_SECRET` | secret | Schützt `/api/cron/due` und `/api/inbound` (interne Worker-Aufrufe) |
+| `CRON_SECRET` | secret | Schützt `/api/cron/due`, `/api/cron/reminders` und `/api/inbound` (interne Worker-Aufrufe) |
 | `ZITADEL_ISSUER`, `ZITADEL_CLIENT_ID` | var | OIDC |
 | `ZITADEL_CLIENT_SECRET` | secret | nur ohne PKCE |
 | `RESEND_API_KEY` | secret | Resend |

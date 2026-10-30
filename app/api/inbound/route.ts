@@ -68,7 +68,9 @@ export async function POST(req: NextRequest) {
         throw e
       }
     },
-    sendConfirmation: (to, content) => sendMail(to, content),
+    sendConfirmation: async (to, content) => {
+      await sendMail(to, content)
+    },
   }
 
   try {

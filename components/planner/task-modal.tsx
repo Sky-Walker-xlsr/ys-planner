@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -10,7 +11,7 @@ import { UserAvatar, shortName } from '@/components/ui/avatar'
 import { Checkbox, LabelPill, Popover } from '@/components/ui/controls'
 import { toast } from '@/components/ui/toast'
 import { LABEL_COLORS, LABEL_COLOR_NAMES, labelStyle } from '@/lib/design'
-import { dueChipClass, dueTextClass, formatDateTime, relativeTime } from '@/lib/dates'
+import { dueChipClass, dueTextClass, formatDateTime, relativeTime, toDateTimeLocal } from '@/lib/dates'
 import { formatBytes } from '@/lib/image'
 import { PRIORITY_LABEL, STATUS_LABEL, type KbFile, type SectionItem, type TaskFile, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
 import { taskFileUrl } from '@/lib/file-urls'
@@ -19,7 +20,7 @@ import { Marked } from './kb-search'
 import { useActions } from './use-actions'
 
 export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onClose: () => void; onOpenFile: (id: string) => void }) {
-  const { state, canEdit, setPresence, presence } = usePlanner()
+  const { state, canEdit, viewer, setPresence, presence } = usePlanner()
   const index = useTaskIndex()
   const t = index.get(taskId)!
   const task = t.task
@@ -100,6 +101,8 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
               </div>
             )}
           </div>
+
+          {viewer.kind === 'user' && <ReminderField taskId={task.id} userId={viewer.id} />}
 
           <div className="mt-4">
             <span className="field-label">{inbox ? 'Tags' : 'Labels'}</span>
@@ -182,20 +185,106 @@ function DescriptionField({ taskId, value, disabled }: { taskId: string; value: 
   const actions = useActions()
   const d = useDraft(value)
   return (
-    <textarea
-      id="task-desc"
-      className="input min-h-24"
-      rows={4}
-      disabled={disabled}
-      placeholder={disabled ? '' : 'Beschreibung hinzufügen'}
-      value={d.text}
-      onFocus={d.start}
-      onChange={(e) => d.setDraft(e.target.value)}
-      onBlur={() => {
-        if (d.text !== value) void actions.updateTask(taskId, { description: d.text })
-        d.end()
-      }}
-    />
+    // Unsichtbare Kopie im selben Grid-Feld gibt die Höhe vor; das Popup scrollt dann als Ganzes
+    <div className="grid">
+      <div aria-hidden className="input invisible min-h-24 whitespace-pre-wrap break-words [grid-area:1/1]" style={{ height: 'auto', paddingBlock: '0.5rem' }}>
+        {d.text + '\n'}
+      </div>
+      <textarea
+        id="task-desc"
+        className="input min-h-24 resize-none overflow-hidden [grid-area:1/1]"
+        rows={4}
+        disabled={disabled}
+        placeholder={disabled ? '' : 'Beschreibung hinzufügen'}
+        value={d.text}
+        onFocus={d.start}
+        onChange={(e) => d.setDraft(e.target.value)}
+        onBlur={() => {
+          if (d.text !== value) void actions.updateTask(taskId, { description: d.text })
+          d.end()
+        }}
+      />
+    </div>
+  )
+}
+
+/** Persönliche Erinnerung per Mail; unabhängig von der Rolle im Planner, nicht für Gäste */
+function ReminderField({ taskId, userId }: { taskId: string; userId: string }) {
+  const { db } = usePlanner()
+  const [loaded, setLoaded] = useState(false)
+  const [email, setEmail] = useState<string | null>(null)
+  const [reminder, setReminder] = useState<{ remind_at: string; sent_at: string | null } | null>(null)
+  const [draft, setDraft] = useState<string | null>(null)
+  const value = draft ?? (reminder ? toDateTimeLocal(reminder.remind_at) : '')
+
+  useEffect(() => {
+    let active = true
+    void Promise.all([
+      db.from('user_settings').select('notify_email').eq('user_id', userId).maybeSingle(),
+      db.from('task_reminders').select('remind_at, sent_at').eq('task_id', taskId).eq('user_id', userId).maybeSingle(),
+    ]).then(([settings, current]) => {
+      if (!active) return
+      setEmail(settings.data?.notify_email ?? null)
+      setReminder(current.data)
+      setLoaded(true)
+    })
+    return () => { active = false }
+  }, [db, taskId, userId])
+
+  async function remove() {
+    setDraft(null)
+    const { error } = await db.from('task_reminders').delete().eq('task_id', taskId).eq('user_id', userId)
+    if (error) toast('Erinnerung konnte nicht entfernt werden')
+    else setReminder(null)
+  }
+
+  async function save() {
+    if (draft === null) return
+    if (!draft) return remove()
+    const at = new Date(draft)
+    setDraft(null)
+    if (at.getTime() === (reminder ? new Date(reminder.remind_at).getTime() : NaN)) return
+    if (at.getTime() <= Date.now()) {
+      toast('Der Zeitpunkt liegt in der Vergangenheit')
+      return
+    }
+    const { data, error } = await db
+      .from('task_reminders')
+      .upsert({ task_id: taskId, user_id: userId, remind_at: at.toISOString() }, { onConflict: 'task_id,user_id' })
+      .select('remind_at, sent_at')
+      .single()
+    if (error) toast('Erinnerung konnte nicht gespeichert werden')
+    else setReminder(data)
+  }
+
+  return (
+    <div className="mt-4">
+      <label htmlFor="task-reminder" className="field-label">Erinnern am</label>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="flex items-center gap-1">
+          <input id="task-reminder" type="datetime-local" className="input w-56" disabled={!loaded || !email} value={value}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => void save()}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
+          {reminder && (
+            <button type="button" className="btn-icon" aria-label="Erinnerung entfernen" title="Erinnerung entfernen" onClick={() => void remove()}>
+              <X size={15} />
+            </button>
+          )}
+        </div>
+        {loaded && (
+          <p className="text-xs text-text-2">
+            {!email ? (
+              <>Dafür braucht es eine Benachrichtigungs-Mail in den <Link href="/einstellungen" className="underline">Einstellungen</Link>.</>
+            ) : reminder?.sent_at ? (
+              `Erinnerung gesendet ${formatDateTime(reminder.sent_at)}`
+            ) : (
+              `Per Mail an ${email}, nur für dich`
+            )}
+          </p>
+        )}
+      </div>
+    </div>
   )
 }
 

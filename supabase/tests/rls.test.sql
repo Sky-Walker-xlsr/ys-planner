@@ -134,6 +134,10 @@ insert into public.share_links (id, planner_id, token_hash, token_ciphertext, pe
   ('90000000-0000-4000-8000-000000000003', 'c0000000-0000-4000-8000-000000000001', 'h3', 'c3', 'edit', now(), null, 'a0000000-0000-4000-8000-000000000001'),
   ('90000000-0000-4000-8000-000000000004', 'c0000000-0000-4000-8000-000000000001', 'h4', 'c4', 'edit', null, now() - interval '1 hour', 'a0000000-0000-4000-8000-000000000001');
 
+-- Erinnerung des Bearbeiters (Zeitpunkt in der Zukunft, wird vom Claim nicht erfasst)
+insert into public.task_reminders (task_id, user_id, remind_at) values
+  ('e0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000002', now() + interval '1 day');
+
 -- ---------------------------------------------------------------------------
 -- Tests
 -- ---------------------------------------------------------------------------
@@ -259,6 +263,19 @@ begin
   perform pg_temp.check('folder', fmember, 'Ordner freigeben verboten', 'cannot', ins_folder_member);
   perform pg_temp.check('folder', fmember, 'Planner löschen verboten', 'cannot', del_planner);
 
+  -- Erinnerungen -------------------------------------------------------------
+  perform pg_temp.check('viewer', viewer, 'Erinnerung: Leser darf eigene setzen', 'can', 'insert into public.task_reminders (task_id, user_id, remind_at) values (' || T1 || ', ''a0000000-0000-4000-8000-000000000003'', now())');
+  perform pg_temp.check('viewer', viewer, 'Erinnerung: für andere verboten', 'cannot', 'insert into public.task_reminders (task_id, user_id, remind_at) values (' || T1 || ', ''a0000000-0000-4000-8000-000000000001'', now())');
+  perform pg_temp.check('stranger', stranger, 'Erinnerung: an fremden Task verboten', 'cannot', 'insert into public.task_reminders (task_id, user_id, remind_at) values (' || T1 || ', ''a0000000-0000-4000-8000-000000000005'', now())');
+  perform pg_temp.check('guest-edit', g_edit, 'Erinnerung: für Gäste verboten', 'cannot', 'insert into public.task_reminders (task_id, user_id, remind_at) values (' || T1 || ', ''a1000000-0000-4000-8000-000000000002'', now())');
+  perform pg_temp.check('editor', editor, 'Erinnerung: sieht eigene', 'rows', 'select task_id from public.task_reminders', 1);
+  perform pg_temp.check('viewer', viewer, 'Erinnerung: fremde unsichtbar', 'rows', 'select task_id from public.task_reminders', 0);
+  perform pg_temp.check('editor', editor, 'Erinnerung: Zeitpunkt ändern', 'can', 'update public.task_reminders set remind_at = now() where task_id = ' || T1);
+  perform pg_temp.check('editor', editor, 'Erinnerung: sent_at setzen verboten', 'cannot', 'update public.task_reminders set sent_at = now() where task_id = ' || T1);
+  perform pg_temp.check('viewer', viewer, 'Erinnerung: fremde löschen verboten', 'cannot', 'delete from public.task_reminders where task_id = ' || T1);
+  perform pg_temp.check('editor', editor, 'Erinnerung: eigene löschen', 'can', 'delete from public.task_reminders where task_id = ' || T1);
+  perform pg_temp.check('owner', owner, 'Erinnerung: Claim nur für Service-Role', 'cannot', 'select public.claim_due_reminders(10)');
+
   -- Eingang ------------------------------------------------------------------
   perform pg_temp.check('viewer', viewer, 'Eingang: sieht eigenen Inbox-Task', 'rows', 'select id from public.tasks where planner_id is null', 1);
   perform pg_temp.check('viewer', viewer, 'Eingang: eigenen Inbox-Task ändern', 'can', 'update public.tasks set title = ''x'' where id = ''e1000000-0000-4000-8000-000000000003''');
@@ -370,6 +387,23 @@ select pg_temp.check('guest-edit',
   pg_temp.guest_claims('a1000000-0000-4000-8000-000000000002', '90000000-0000-4000-8000-000000000002', 'c0000000-0000-4000-8000-000000000001', 'edit', 'Gast Bearbeiten'),
   'Gast-Kommentar: author_user_id null, guest_name gesetzt', 'can',
   'with c as (insert into public.comments (task_id, planner_id, author_user_id, body) values (''e0000000-0000-4000-8000-000000000001'', ''c0000000-0000-4000-8000-000000000001'', ''a0000000-0000-4000-8000-000000000001'', ''Gefälscht'') returning author_user_id, guest_name) select 1 from c where author_user_id is null and guest_name = ''Gast Bearbeiten''');
+
+-- Claim: nur fällige Erinnerungen mit Zugriff, nicht erledigt, mit Adresse
+insert into public.task_reminders (task_id, user_id, remind_at) values
+  ('e0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000003', now() - interval '1 minute'),
+  ('e0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000005', now() - interval '1 minute');
+create temp table claim_result on commit drop as select * from public.claim_due_reminders(10);
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Claim: liefert nur den User mit Zugriff', count(*) = 1 and bool_and(user_id = 'a0000000-0000-4000-8000-000000000003'), 'rows=' || count(*) from claim_result;
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Claim: markiert auch die ohne Zugriff als erledigt', count(*) = 2, 'rows=' || count(*) from public.task_reminders where sent_at is not null;
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Claim: künftige Erinnerung bleibt offen', count(*) = 1, 'rows=' || count(*) from public.task_reminders where sent_at is null;
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Claim: zweiter Lauf versendet nichts doppelt', count(*) = 0, 'rows=' || count(*) from public.claim_due_reminders(10);
+update public.task_reminders set remind_at = now() + interval '1 hour' where user_id = 'a0000000-0000-4000-8000-000000000003';
+insert into rls_results (actor, label, passed, detail)
+select 'service', 'Neuer Zeitpunkt macht die Erinnerung wieder scharf', count(*) = 1 and bool_and(sent_at is null), 'rows=' || count(*) from public.task_reminders where user_id = 'a0000000-0000-4000-8000-000000000003';
 
 select actor, label, passed, detail from rls_results order by n;
 

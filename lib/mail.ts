@@ -53,7 +53,8 @@ export function renderMail(c: MailContent): string {
   </td></tr></table></body></html>`
 }
 
-export async function sendMail(to: string, content: MailContent) {
+/** false, wenn Resend den Versand ablehnt */
+export async function sendMail(to: string, content: MailContent): Promise<boolean> {
   const resend = new Resend(serverEnv.resendApiKey)
   const { error } = await resend.emails.send({
     from: serverEnv.mailFrom,
@@ -62,4 +63,5 @@ export async function sendMail(to: string, content: MailContent) {
     html: renderMail(content),
   })
   if (error) console.error('Mailversand fehlgeschlagen', error)
+  return !error
 }
