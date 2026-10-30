@@ -232,7 +232,7 @@ Mails gehen nur raus, wenn in den Einstellungen des Empfängers `notify_enabled`
 
 `worker.ts` umhüllt den OpenNext-Worker und ergänzt einen `scheduled`-Handler. Cloudflare-Crons laufen in UTC, deshalb sind zwei Zeiten konfiguriert: `0 5 * * *` (Sommerzeit) und `0 6 * * *` (Winterzeit). `/api/cron/due` läuft nur, wenn es in Europe/Zurich 07:00 ist. Pro User wird eine gebündelte Mail mit allen morgen fälligen Aufgaben und Abschnitten verschickt.
 
-Der dritte Cron (`*/5 * * * *`) ruft `/api/cron/reminders` auf und verschickt die Erinnerungen aus dem Task-Popup, also auf bis zu 5 Minuten genau. Keine Mail geht raus, wenn der Task erledigt ist, der Zugriff weg ist oder keine Benachrichtigungs-Mail gesetzt ist.
+Der dritte Cron (`*/5 * * * *`) ruft `/api/cron/reminders` auf und verschickt die Erinnerungen aus dem Task-Popup, also auf bis zu 5 Minuten genau. Sie gehen an alle Zugewiesenen (im Eingang an den Besitzer), an die Benachrichtigungs-Mail oder sonst an die Login-Mail, und unabhängig von den Benachrichtigungs-Einstellungen. Keine Mail geht raus, wenn der Task erledigt ist oder niemand zugewiesen ist.
 
 Manuell auslösen (z. B. zum Testen):
 ```bash

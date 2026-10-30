@@ -1,6 +1,5 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Link from 'next/link'
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -13,14 +12,14 @@ import { toast } from '@/components/ui/toast'
 import { LABEL_COLORS, LABEL_COLOR_NAMES, labelStyle } from '@/lib/design'
 import { dueChipClass, dueTextClass, formatDateTime, relativeTime, toDateTimeLocal } from '@/lib/dates'
 import { formatBytes } from '@/lib/image'
-import { PRIORITY_LABEL, STATUS_LABEL, type KbFile, type SectionItem, type TaskFile, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
+import { PRIORITY_LABEL, STATUS_LABEL, type KbFile, type SectionItem, type TaskFile, type Task, type TaskPriority, type TaskSection, type TaskStatus } from '@/lib/types'
 import { taskFileUrl } from '@/lib/file-urls'
 import { highlight, normalize, searchTerms } from '@/lib/search'
 import { Marked } from './kb-search'
 import { useActions } from './use-actions'
 
 export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onClose: () => void; onOpenFile: (id: string) => void }) {
-  const { state, canEdit, viewer, setPresence, presence } = usePlanner()
+  const { state, canEdit, setPresence, presence } = usePlanner()
   const index = useTaskIndex()
   const t = index.get(taskId)!
   const task = t.task
@@ -102,7 +101,7 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
             )}
           </div>
 
-          {viewer.kind === 'user' && <ReminderField taskId={task.id} userId={viewer.id} />}
+          <ReminderField task={task} assignees={t.assignees} disabled={!canEdit} />
 
           <div className="mt-4">
             <span className="field-label">{inbox ? 'Tags' : 'Labels'}</span>
@@ -208,53 +207,32 @@ function DescriptionField({ taskId, value, disabled }: { taskId: string; value: 
   )
 }
 
-/** Persönliche Erinnerung per Mail; unabhängig von der Rolle im Planner, nicht für Gäste */
-function ReminderField({ taskId, userId }: { taskId: string; userId: string }) {
-  const { db } = usePlanner()
-  const [loaded, setLoaded] = useState(false)
-  const [email, setEmail] = useState<string | null>(null)
-  const [reminder, setReminder] = useState<{ remind_at: string; sent_at: string | null } | null>(null)
+/** Erinnerung per Mail an alle Zugewiesenen; im Eingang an den Besitzer */
+function ReminderField({ task, assignees, disabled }: { task: Task; assignees: string[]; disabled: boolean }) {
+  const { state } = usePlanner()
+  const actions = useActions()
   const [draft, setDraft] = useState<string | null>(null)
-  const value = draft ?? (reminder ? toDateTimeLocal(reminder.remind_at) : '')
+  const value = draft ?? (task.remind_at ? toDateTimeLocal(task.remind_at) : '')
+  const names = assignees.map((id) => state.users[id]?.display_name ?? 'Unbekannt').join(', ')
 
-  useEffect(() => {
-    let active = true
-    void Promise.all([
-      db.from('user_settings').select('notify_email').eq('user_id', userId).maybeSingle(),
-      db.from('task_reminders').select('remind_at, sent_at').eq('task_id', taskId).eq('user_id', userId).maybeSingle(),
-    ]).then(([settings, current]) => {
-      if (!active) return
-      setEmail(settings.data?.notify_email ?? null)
-      setReminder(current.data)
-      setLoaded(true)
-    })
-    return () => { active = false }
-  }, [db, taskId, userId])
-
-  async function remove() {
-    setDraft(null)
-    const { error } = await db.from('task_reminders').delete().eq('task_id', taskId).eq('user_id', userId)
-    if (error) toast('Erinnerung konnte nicht entfernt werden')
-    else setReminder(null)
+  function set(remindAt: string | null) {
+    return actions.updateTask(task.id, { remind_at: remindAt, reminder_sent_at: null })
   }
 
   async function save() {
     if (draft === null) return
-    if (!draft) return remove()
-    const at = new Date(draft)
+    const at = draft ? new Date(draft) : null
     setDraft(null)
-    if (at.getTime() === (reminder ? new Date(reminder.remind_at).getTime() : NaN)) return
+    if (!at) {
+      if (task.remind_at) await set(null)
+      return
+    }
+    if (task.remind_at && at.getTime() === new Date(task.remind_at).getTime()) return
     if (at.getTime() <= Date.now()) {
       toast('Der Zeitpunkt liegt in der Vergangenheit')
       return
     }
-    const { data, error } = await db
-      .from('task_reminders')
-      .upsert({ task_id: taskId, user_id: userId, remind_at: at.toISOString() }, { onConflict: 'task_id,user_id' })
-      .select('remind_at, sent_at')
-      .single()
-    if (error) toast('Erinnerung konnte nicht gespeichert werden')
-    else setReminder(data)
+    await set(at.toISOString())
   }
 
   return (
@@ -262,27 +240,25 @@ function ReminderField({ taskId, userId }: { taskId: string; userId: string }) {
       <label htmlFor="task-reminder" className="field-label">Erinnern am</label>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <div className="flex items-center gap-1">
-          <input id="task-reminder" type="datetime-local" className="input w-56" disabled={!loaded || !email} value={value}
+          <input id="task-reminder" type="datetime-local" className="input w-56" disabled={disabled} value={value}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => void save()}
             onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} />
-          {reminder && (
-            <button type="button" className="btn-icon" aria-label="Erinnerung entfernen" title="Erinnerung entfernen" onClick={() => void remove()}>
+          {task.remind_at && !disabled && (
+            <button type="button" className="btn-icon" aria-label="Erinnerung entfernen" title="Erinnerung entfernen" onClick={() => { setDraft(null); void set(null) }}>
               <X size={15} />
             </button>
           )}
         </div>
-        {loaded && (
-          <p className="text-xs text-text-2">
-            {!email ? (
-              <>Dafür braucht es eine Benachrichtigungs-Mail in den <Link href="/einstellungen" className="underline">Einstellungen</Link>.</>
-            ) : reminder?.sent_at ? (
-              `Erinnerung gesendet ${formatDateTime(reminder.sent_at)}`
-            ) : (
-              `Per Mail an ${email}, nur für dich`
-            )}
-          </p>
-        )}
+        <p className="text-xs text-text-2">
+          {task.reminder_sent_at
+            ? `Erinnerung gesendet ${formatDateTime(task.reminder_sent_at)}`
+            : task.planner_id === null
+              ? 'Erinnerung per Mail an dich'
+              : names
+                ? `Erinnerung per Mail an ${names}`
+                : 'Niemand zugewiesen: Es geht keine Erinnerung raus'}
+        </p>
       </div>
     </div>
   )

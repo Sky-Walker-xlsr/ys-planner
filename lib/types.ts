@@ -40,6 +40,9 @@ export type Task = {
   created_by: string | null
   created_by_guest: string | null
   completed_at: string | null
+  /** Erinnerung per Mail an alle Zugewiesenen (Eingang: an den Besitzer) */
+  remind_at: string | null
+  reminder_sent_at: string | null
   created_at: string
   updated_at: string
 }
