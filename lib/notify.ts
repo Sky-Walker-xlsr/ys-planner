@@ -81,7 +81,7 @@ export async function notifyInvited(opts: {
     heading: `Du wurdest zu einem ${what} eingeladen`,
     paragraphs: [
       `${opts.inviterName} hat dich als ${ROLE_LABEL[opts.role]} zum ${what} «${opts.targetName}» eingeladen.`,
-      ...(opts.kind === 'folder' ? ['Du hast damit Zugriff auf alle Planner in diesem Ordner.'] : []),
+      ...(opts.kind === 'folder' ? ['Du hast damit Zugriff auf alle Planner in diesem Ordner und seinen Unterordnern.'] : []),
     ],
     cta: { label: `${what} öffnen`, href: opts.kind === 'planner' ? `${serverEnv.appUrl}/p/${opts.targetId}` : serverEnv.appUrl },
   })

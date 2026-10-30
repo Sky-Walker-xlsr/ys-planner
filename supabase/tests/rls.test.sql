@@ -380,6 +380,53 @@ select pg_temp.check('guest-edit',
   'Gast-Kommentar: author_user_id null, guest_name gesetzt', 'can',
   'with c as (insert into public.comments (task_id, planner_id, author_user_id, body) values (''e0000000-0000-4000-8000-000000000001'', ''c0000000-0000-4000-8000-000000000001'', ''a0000000-0000-4000-8000-000000000001'', ''Gefälscht'') returning author_user_id, guest_name) select 1 from c where author_user_id is null and guest_name = ''Gast Bearbeiten''');
 
+-- Unterordner: S liegt in T-Ordner, Planner P3 in S, ein Mitglied nur von S
+insert into public.users (id, zitadel_sub, email, display_name) values
+  ('a0000000-0000-4000-8000-000000000006', 'test|sub', 'sub@test.local', 'T Unterordner');
+insert into public.folders (id, owner_id, parent_id, name) values
+  ('b0000000-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', 'T-Sub'),
+  ('b0000000-0000-4000-8000-000000000003', 'a0000000-0000-4000-8000-000000000005', null, 'T-Fremd');
+insert into public.folder_members (folder_id, user_id, role) values
+  ('b0000000-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000006', 'viewer');
+insert into public.planners (id, owner_id, folder_id, name) values
+  ('c0000000-0000-4000-8000-000000000003', 'a0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002', 'T-P3');
+
+do $$
+declare
+  FO constant text := '''b0000000-0000-4000-8000-000000000001''';
+  SUB constant text := '''b0000000-0000-4000-8000-000000000002''';
+  FREMD constant text := '''b0000000-0000-4000-8000-000000000003''';
+  P3 constant text := '''c0000000-0000-4000-8000-000000000003''';
+  owner jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000001');
+  fmember jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000004');
+  stranger jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000005');
+  submember jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000006');
+begin
+  perform pg_temp.check('folder', fmember, 'Unterordner: Mitglied des Elternordners sieht ihn', 'rows', 'select id from public.folders where id = ' || SUB, 1);
+  perform pg_temp.check('folder', fmember, 'Unterordner: Rolle wird im Planner vererbt', 'rows', 'select 1 where public.planner_role(' || P3 || ') = ''editor''', 1);
+  perform pg_temp.check('folder', fmember, 'Unterordner: Bearbeiter darf nicht umbenennen', 'cannot', 'update public.folders set name = ''x'' where id = ' || SUB);
+  perform pg_temp.check('folder', fmember, 'Unterordner: Bearbeiter darf keinen anlegen', 'cannot', 'insert into public.folders (owner_id, parent_id, name) values (''a0000000-0000-4000-8000-000000000004'', ' || FO || ', ''x'')');
+  perform pg_temp.check('owner', owner, 'Unterordner: Owner legt einen an', 'can', 'insert into public.folders (owner_id, parent_id, name) values (''a0000000-0000-4000-8000-000000000001'', ' || SUB || ', ''x'')');
+  perform pg_temp.check('owner', owner, 'Unterordner: Owner erbt Owner-Rechte', 'can', 'update public.folders set name = ''x'' where id = ' || SUB);
+  perform pg_temp.check('owner', owner, 'Unterordner: Zyklus verboten', 'cannot', 'update public.folders set parent_id = ' || SUB || ' where id = ' || FO);
+  perform pg_temp.check('owner', owner, 'Unterordner: in sich selbst verboten', 'cannot', 'update public.folders set parent_id = id where id = ' || SUB);
+  perform pg_temp.check('owner', owner, 'Unterordner: auf oberste Ebene verschieben', 'can', 'update public.folders set parent_id = null where id = ' || SUB);
+  perform pg_temp.check('owner', owner, 'Unterordner: nicht in fremden Ordner verschieben', 'cannot', 'update public.folders set parent_id = ' || FREMD || ' where id = ' || SUB);
+  perform pg_temp.check('stranger', stranger, 'Unterordner: nicht in fremden Ordner hängen', 'cannot', 'update public.folders set parent_id = ' || FO || ' where id = ' || FREMD);
+  perform pg_temp.check('stranger', stranger, 'Unterordner: Fremde sehen ihn nicht', 'rows', 'select id from public.folders where id = ' || SUB, 0);
+  perform pg_temp.check('stranger', stranger, 'Unterordner: Fremde sehen P3 nicht', 'rows', 'select id from public.planners where id = ' || P3, 0);
+  perform pg_temp.check('stranger', stranger, 'Unterordner: folder_chain liefert Fremden nichts', 'rows', 'select public.folder_chain(' || SUB || ')', 0);
+  perform pg_temp.check('sub', submember, 'Unterordner: Mitglied sieht ihn und P3', 'rows', 'select id from public.planners where id = ' || P3, 1);
+  perform pg_temp.check('sub', submember, 'Unterordner: Mitglied hat nur seine Rolle', 'rows', 'select 1 where public.planner_role(' || P3 || ') = ''viewer''', 1);
+  perform pg_temp.check('sub', submember, 'Unterordner: Elternordner bleibt unsichtbar', 'rows', 'select id from public.folders where id = ' || FO, 0);
+  perform pg_temp.check('sub', submember, 'Unterordner: keine Rechte im Elternordner', 'rows', 'select 1 where public.folder_role(' || FO || ') is null', 1);
+  perform pg_temp.check('sub', submember, 'Unterordner: sieht Mitglieder der Elternordner', 'rows', 'select user_id from public.folder_members where folder_id = ' || FO, 3);
+  perform pg_temp.check('sub', submember, 'Unterordner: sieht deren Namen', 'rows', 'select id from public.users where id = ''a0000000-0000-4000-8000-000000000004''', 1);
+  perform pg_temp.check('sub', submember, 'Unterordner: folder_chain liefert die Kette', 'rows', 'select public.folder_chain(' || SUB || ')', 2);
+  perform pg_temp.check('sub', submember, 'Unterordner: sieht Planner direkt im Elternordner nicht', 'rows', 'select id from public.planners where id = ''c0000000-0000-4000-8000-000000000001''', 0);
+end
+$$;
+
 -- Claim: alle Zugewiesenen mit Zugriff, im Eingang der Besitzer, nichts bei erledigten Tasks
 insert into public.task_assignees (task_id, user_id, planner_id) values
   ('e0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000002', 'c0000000-0000-4000-8000-000000000001'),

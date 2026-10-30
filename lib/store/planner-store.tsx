@@ -218,10 +218,12 @@ export function PlannerProvider({
 
     let folder: Folder | null = null
     if (planner.folder_id) {
-      const [{ data: f }, { data: fm }] = await Promise.all([
+      // Mitglieder auch aus den Elternordnern: Ihre Freigaben gelten für diesen Planner
+      const [{ data: f }, { data: chain }] = await Promise.all([
         db.from('folders').select('*').eq('id', planner.folder_id).maybeSingle<Folder>(),
-        db.from('folder_members').select('*').eq('folder_id', planner.folder_id),
+        db.rpc('folder_chain', { f: planner.folder_id }),
       ])
+      const { data: fm } = await db.from('folder_members').select('*').in('folder_id', (chain ?? []) as string[])
       folder = f ?? null
       for (const row of (fm ?? []) as FolderMember[]) data.folder_members[KEYS.folder_members(row)] = row
     }
@@ -314,6 +316,10 @@ export function PlannerProvider({
       if ((p.old as { id: string }).id === plannerId) void reload()
     })
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'folder_members' }, () => {
+      if (stateRef.current.planner?.folder_id) void reload()
+    })
+    // Ordner verschoben: Die geerbten Rechte können sich ändern
+    channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'folders' }, () => {
       if (stateRef.current.planner?.folder_id) void reload()
     })
     channel.subscribe()
@@ -421,7 +427,9 @@ export function PlannerProvider({
     for (const fm of Object.values(state.data.folder_members)) {
       const user = state.users[fm.user_id]
       if (!user) continue
-      byUser.set(fm.user_id, { user, role: fm.role, origin: 'folder', folderName: state.folder?.name })
+      const existing = byUser.get(fm.user_id)
+      if (existing && ROLE_RANK[existing.role] >= ROLE_RANK[fm.role]) continue
+      byUser.set(fm.user_id, { user, role: fm.role, origin: 'folder', folderName: fm.folder_id === state.folder?.id ? state.folder.name : undefined })
     }
     for (const pm of Object.values(state.data.planner_members)) {
       const user = state.users[pm.user_id]

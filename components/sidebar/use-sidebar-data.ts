@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getBrowserClient } from '@/lib/supabase/browser'
 import type { Favorite, Folder, FolderMember, Planner, PlannerMember, Role } from '@/lib/types'
 import { ROLE_RANK } from '@/lib/types'
+import { effectiveFolderRoles } from '@/lib/folders'
 
 export type SidebarData = {
   loaded: boolean
@@ -72,8 +73,7 @@ export function useSidebarData(userId: string) {
   }, [db, load, scheduleLoad])
 
   const roles = useMemo(() => {
-    const folderRole = new Map<string, Role>()
-    for (const fm of data.folderMembers) if (fm.user_id === userId) folderRole.set(fm.folder_id, fm.role)
+    const folderRole = effectiveFolderRoles(data.folders, data.folderMembers.filter((fm) => fm.user_id === userId))
     const plannerRole = new Map<string, Role>()
     for (const p of data.planners) {
       const direct = data.plannerMembers.find((m) => m.planner_id === p.id)?.role

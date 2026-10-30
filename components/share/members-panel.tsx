@@ -14,7 +14,7 @@ export type MemberRow = {
 }
 
 const ORIGIN_TEXT = (m: MemberRow) =>
-  m.origin === 'creator' ? 'Ersteller' : m.origin === 'folder' ? `via Ordner «${m.folderName ?? ''}»` : 'direkt eingeladen'
+  m.origin === 'creator' ? 'Ersteller' : m.origin === 'folder' ? (m.folderName ? `via Ordner «${m.folderName}»` : 'via übergeordneten Ordner') : 'direkt eingeladen'
 
 export function MembersPanel({
   db,

@@ -18,6 +18,7 @@ Planner-Web-App im Stil von MS Planner: Boards mit Buckets, Raster, Zeitplan, Di
 | Rechte | Eine SQL-Funktion `planner_role(planner_id)` liefert die effektive Rolle (höchste aus `planner_members` und `folder_members` bzw. Gast-Link). Alle Policies bauen darauf auf. |
 | Dateien | Cloudflare R2 (Binding `FILES`, Bucket `planner-files`). R2 hat kein RLS: Jeder Zugriff läuft über Route Handler, die die Metadaten-Zeile mit dem JWT des Aufrufers lesen (RLS) und `planner_role()` prüfen, also dieselbe Logik wie die Policies, inklusive Gast-Claims. Metadaten liegen in Postgres. |
 | Service-Role | Nur serverseitig: Login, Share-Link-Erstellung/-Prüfung, Mailversand, Cron. |
+| Ordner | Ordner können verschachtelt sein. Freigaben gelten für den Ordner und alles darunter, die höchste Rolle der Kette zählt. Wer nur einen Unterordner hat, sieht den Elternordner nicht, aber dessen Mitglieder. |
 | Benachrichtigungen | Zuweisen, Kommentare und Einladungen laufen über Route-Handler (mit User-JWT, RLS aktiv). Die Mail geht danach per `after()` raus. Fälligkeiten: Cron Trigger. |
 
 ### Entscheidung: eigene JWTs mit Supabase JWT Signing Keys

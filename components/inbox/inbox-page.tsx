@@ -12,6 +12,7 @@ import { TaskModal } from '@/components/planner/task-modal'
 import { PlannerProvider, sortByPosition, usePlanner, type Viewer } from '@/lib/store/planner-store'
 import { formatDateTime } from '@/lib/dates'
 import { ROLE_RANK, type Bucket, type Planner, type Role, type Task } from '@/lib/types'
+import { effectiveFolderRoles } from '@/lib/folders'
 
 export function InboxPage() {
   const me = useCurrentUser()
@@ -124,14 +125,15 @@ function MoveDialog({ task, onClose, onMoved }: { task: Task; onClose: () => voi
 
   useEffect(() => {
     void (async () => {
-      const [{ data: ps }, { data: pm }, { data: fm }] = await Promise.all([
+      const [{ data: ps }, { data: pm }, { data: fm }, { data: fs }] = await Promise.all([
         db.from('planners').select('*').order('name'),
         db.from('planner_members').select('planner_id, role').eq('user_id', viewer.id),
         db.from('folder_members').select('folder_id, role').eq('user_id', viewer.id),
+        db.from('folders').select('id, parent_id, name'),
       ])
       // Effektive Rolle wie planner_role(): höchste aus Planner- und Ordner-Mitgliedschaft
       const direct = new Map((pm ?? []).map((m) => [m.planner_id as string, m.role as Role]))
-      const viaFolder = new Map((fm ?? []).map((m) => [m.folder_id as string, m.role as Role]))
+      const viaFolder = effectiveFolderRoles(fs ?? [], (fm ?? []) as { folder_id: string; role: Role }[])
       const editable = ((ps ?? []) as Planner[]).filter((p) => {
         const roles = [direct.get(p.id), p.folder_id ? viaFolder.get(p.folder_id) : undefined].filter(Boolean) as Role[]
         return roles.some((r) => ROLE_RANK[r] >= ROLE_RANK.editor)

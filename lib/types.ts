@@ -14,7 +14,7 @@ export type UserSettings = {
   notify_on_invite: boolean
 }
 
-export type Folder = { id: string; owner_id: string; name: string; position: number }
+export type Folder = { id: string; owner_id: string; parent_id: string | null; name: string; position: number }
 export type FolderMember = { folder_id: string; user_id: string; role: Role }
 export type Planner = { id: string; owner_id: string; folder_id: string | null; name: string; color: string; position: number; mail_tag: string | null }
 export type PlannerMember = { planner_id: string; user_id: string; role: Role }

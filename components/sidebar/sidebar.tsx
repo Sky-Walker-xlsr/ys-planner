@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, usePathname, useRouter } from 'next/navigation'
 import {
-  DndContext, PointerSensor, KeyboardSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent,
+  DndContext, PointerSensor, KeyboardSensor, pointerWithin, rectIntersection, useDraggable, useDroppable, useSensor, useSensors, type CollisionDetection, type DragEndEvent,
 } from '@dnd-kit/core'
 import {
   CheckSquare, ChevronDown, ChevronRight, Folder as FolderIcon, Inbox, MoreHorizontal, Plus, Search, Settings, Star,
@@ -15,12 +15,25 @@ import { Modal } from '@/components/ui/modal'
 import { toast } from '@/components/ui/toast'
 import { FolderShareDialog } from '@/components/share/folder-share-dialog'
 import { PLANNER_COLORS } from '@/lib/design'
+import { childrenByParent, folderOptions, isInSubtree } from '@/lib/folders'
 import { getBrowserClient } from '@/lib/supabase/browser'
 import type { Folder, Planner } from '@/lib/types'
 import { Wordmark } from '@/components/brand/Wordmark'
 import { useSidebarData } from './use-sidebar-data'
 
 const NO_FOLDER = '__none__'
+const FOLDER_ROOT = '__root__'
+const FOLDER_DRAG = 'folder:'
+
+// Ablageziele sind verschachtelt: Der innerste Ordner unter dem Zeiger gewinnt
+const innermostFolder: CollisionDetection = (args) => {
+  const hits = args.pointerCoordinates ? pointerWithin(args) : rectIntersection(args)
+  const area = (id: string | number) => {
+    const r = args.droppableRects.get(id)
+    return r ? r.width * r.height : Infinity
+  }
+  return [...hits].sort((a, b) => area(a.id) - area(b.id))
+}
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const me = useCurrentUser()
@@ -31,7 +44,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const activeId = params.plannerId
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [newPlannerOpen, setNewPlannerOpen] = useState(false)
-  const [folderDialog, setFolderDialog] = useState<{ mode: 'new' } | { mode: 'rename'; folder: Folder } | null>(null)
+  const [folderDialog, setFolderDialog] = useState<{ mode: 'new'; parentId?: string } | { mode: 'rename'; folder: Folder } | null>(null)
   const [shareFolder, setShareFolder] = useState<Folder | null>(null)
 
   const sensors = useSensors(
@@ -55,6 +68,12 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     return m
   }, [data.folderMembers])
 
+  const folderTree = useMemo(() => childrenByParent(data.folders), [data.folders])
+  const ownedFolderOptions = useMemo(
+    () => folderOptions(data.folders).filter((o) => roles.folderRole.get(o.id) === 'owner'),
+    [data.folders, roles.folderRole],
+  )
+
   const plannerById = useMemo(() => new Map(data.planners.map((p) => [p.id, p])), [data.planners])
   const favorites = data.favorites.map((f) => plannerById.get(f.planner_id)).filter(Boolean) as Planner[]
 
@@ -74,20 +93,99 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   }
 
   async function onDragEnd(e: DragEndEvent) {
-    const plannerId = String(e.active.id)
+    const dragged = String(e.active.id)
     const target = e.over ? String(e.over.id) : null
     if (!target) return
-    const planner = plannerById.get(plannerId)
+    const dest = target === NO_FOLDER || target === FOLDER_ROOT ? null : target
+    if (dragged.startsWith(FOLDER_DRAG)) return moveFolder(dragged.slice(FOLDER_DRAG.length), dest)
+
+    const planner = plannerById.get(dragged)
     if (!planner) return
-    const folderId = target === NO_FOLDER ? null : target
-    if ((planner.folder_id ?? null) === folderId) return
-    if (folderId && roles.folderRole.get(folderId) !== 'owner') {
+    if ((planner.folder_id ?? null) === dest) return
+    if (dest && roles.folderRole.get(dest) !== 'owner') {
       toast('Nur Owner des Zielordners können Planner hineinverschieben')
       return
     }
-    const { error } = await db.from('planners').update({ folder_id: folderId }).eq('id', plannerId)
+    const { error } = await db.from('planners').update({ folder_id: dest }).eq('id', dragged)
     if (error) toast('Planner konnte nicht verschoben werden')
     await reload()
+  }
+
+  async function moveFolder(id: string, dest: string | null) {
+    const folder = data.folders.find((f) => f.id === id)
+    if (!folder || (folder.parent_id ?? null) === dest) return
+    if (dest && isInSubtree(data.folders, id, dest)) {
+      toast('Ein Ordner kann nicht in sich selbst oder seine Unterordner verschoben werden')
+      return
+    }
+    if (dest && roles.folderRole.get(dest) !== 'owner') {
+      toast('Nur Owner des Zielordners können Ordner hineinverschieben')
+      return
+    }
+    const { error } = await db.from('folders').update({ parent_id: dest }).eq('id', id)
+    if (error) toast('Ordner konnte nicht verschoben werden')
+    await reload()
+  }
+
+  function renderFolder(f: Folder): React.ReactNode {
+    const open = !collapsed[f.id]
+    const list = plannersByFolder.get(f.id) ?? []
+    const subfolders = folderTree.get(f.id) ?? []
+    const count = memberCount.get(f.id) ?? 0
+    const isOwner = roles.folderRole.get(f.id) === 'owner'
+    return (
+      <FolderDrop key={f.id} id={f.id}>
+        <DraggableFolder id={f.id} enabled={isOwner}>
+          <div className="group flex items-center gap-1 rounded-md px-1 py-1 text-sm hover:bg-bg">
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-left cursor-pointer"
+              aria-expanded={open}
+              onClick={() => setCollapsed((c) => ({ ...c, [f.id]: open }))}
+            >
+              {open ? <ChevronDown size={14} className="text-text-2" /> : <ChevronRight size={14} className="text-text-2" />}
+              <FolderIcon size={15} className="shrink-0 text-text-2" />
+              <span className="truncate font-medium">{f.name}</span>
+              {count > 1 && <span className="shrink-0 text-xs text-text-2">geteilt · {count}</span>}
+            </button>
+            <Popover
+              align="right"
+              width={200}
+              trigger={({ toggle }) => (
+                <button type="button" className="btn-icon size-6 opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label={`Ordner ${f.name}: Aktionen`} onClick={toggle}>
+                  <MoreHorizontal size={14} />
+                </button>
+              )}
+            >
+              {(close) => (
+                <>
+                  <MenuItem onClick={() => { close(); setShareFolder(f) }}>
+                    {isOwner ? 'Teilen' : 'Mitglieder anzeigen'}
+                  </MenuItem>
+                  {isOwner && (
+                    <>
+                      <MenuItem onClick={() => { close(); setFolderDialog({ mode: 'new', parentId: f.id }) }}>Unterordner erstellen</MenuItem>
+                      <MenuItem onClick={() => { close(); setFolderDialog({ mode: 'rename', folder: f }) }}>Umbenennen oder verschieben</MenuItem>
+                    </>
+                  )}
+                </>
+              )}
+            </Popover>
+          </div>
+        </DraggableFolder>
+        {open && (
+          <div className="ml-4">
+            {subfolders.map(renderFolder)}
+            {list.length === 0 && subfolders.length === 0 && <p className="px-2 py-1 text-xs text-text-2">Leer</p>}
+            {list.map((p) => (
+              <DraggablePlanner key={p.id} planner={p} enabled={roles.plannerRole.get(p.id) === 'owner'}>
+                <PlannerRow planner={p} active={p.id === activeId} onNavigate={onNavigate} onInboxDrop={inboxDrop(p)} />
+              </DraggablePlanner>
+            ))}
+          </div>
+        )}
+      </FolderDrop>
+    )
   }
 
   return (
@@ -103,7 +201,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <SidebarSearch planners={data.planners} onNavigate={onNavigate} />
       </div>
 
-      <DndContext sensors={sensors} onDragEnd={onDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={innermostFolder} onDragEnd={onDragEnd}>
         <nav className="mt-3 flex-1 overflow-y-auto px-2 pb-3" aria-label="Planner">
           <Link
             href="/meine-aufgaben"
@@ -140,69 +238,19 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             </Section>
           )}
 
-          <Section
-            title="Ordner"
-            action={
-              <button type="button" className="btn-icon size-6" aria-label="Neuer Ordner" onClick={() => setFolderDialog({ mode: 'new' })}>
-                <Plus size={14} />
-              </button>
-            }
-          >
-            {data.folders.map((f) => {
-              const open = !collapsed[f.id]
-              const list = plannersByFolder.get(f.id) ?? []
-              const count = memberCount.get(f.id) ?? 0
-              const isOwner = roles.folderRole.get(f.id) === 'owner'
-              return (
-                <FolderDrop key={f.id} id={f.id}>
-                  <div className="group flex items-center gap-1 rounded-md px-1 py-1 text-sm hover:bg-bg">
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-1.5 text-left cursor-pointer"
-                      aria-expanded={open}
-                      onClick={() => setCollapsed((c) => ({ ...c, [f.id]: open }))}
-                    >
-                      {open ? <ChevronDown size={14} className="text-text-2" /> : <ChevronRight size={14} className="text-text-2" />}
-                      <FolderIcon size={15} className="shrink-0 text-text-2" />
-                      <span className="truncate font-medium">{f.name}</span>
-                      {count > 1 && <span className="shrink-0 text-xs text-text-2">geteilt · {count}</span>}
-                    </button>
-                    <Popover
-                      align="right"
-                      width={180}
-                      trigger={({ toggle }) => (
-                        <button type="button" className="btn-icon size-6 opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label={`Ordner ${f.name}: Aktionen`} onClick={toggle}>
-                          <MoreHorizontal size={14} />
-                        </button>
-                      )}
-                    >
-                      {(close) => (
-                        <>
-                          <MenuItem onClick={() => { close(); setShareFolder(f) }}>
-                            {isOwner ? 'Teilen' : 'Mitglieder anzeigen'}
-                          </MenuItem>
-                          {isOwner && (
-                            <MenuItem onClick={() => { close(); setFolderDialog({ mode: 'rename', folder: f }) }}>Umbenennen</MenuItem>
-                          )}
-                        </>
-                      )}
-                    </Popover>
-                  </div>
-                  {open && (
-                    <div className="ml-4">
-                      {list.length === 0 && <p className="px-2 py-1 text-xs text-text-2">Leer</p>}
-                      {list.map((p) => (
-                        <DraggablePlanner key={p.id} planner={p} enabled={roles.plannerRole.get(p.id) === 'owner'}>
-                          <PlannerRow planner={p} active={p.id === activeId} onNavigate={onNavigate} onInboxDrop={inboxDrop(p)} />
-                        </DraggablePlanner>
-                      ))}
-                    </div>
-                  )}
-                </FolderDrop>
-              )
-            })}
-            {data.loaded && data.folders.length === 0 && <p className="px-2 py-1 text-xs text-text-2">Noch keine Ordner</p>}
-          </Section>
+          <FolderDrop id={FOLDER_ROOT}>
+            <Section
+              title="Ordner"
+              action={
+                <button type="button" className="btn-icon size-6" aria-label="Neuer Ordner" onClick={() => setFolderDialog({ mode: 'new' })}>
+                  <Plus size={14} />
+                </button>
+              }
+            >
+              {(folderTree.get(null) ?? []).map(renderFolder)}
+              {data.loaded && data.folders.length === 0 && <p className="px-2 py-1 text-xs text-text-2">Noch keine Ordner</p>}
+            </Section>
+          </FolderDrop>
 
           <FolderDrop id={NO_FOLDER}>
             <Section title="Ohne Ordner">
@@ -232,7 +280,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       {newPlannerOpen && (
         <NewPlannerDialog
-          folders={data.folders.filter((f) => roles.folderRole.get(f.id) === 'owner')}
+          folders={ownedFolderOptions}
           onClose={() => setNewPlannerOpen(false)}
           onCreated={async (id) => {
             setNewPlannerOpen(false)
@@ -245,6 +293,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       {folderDialog && (
         <FolderNameDialog
           folder={folderDialog.mode === 'rename' ? folderDialog.folder : null}
+          initialParent={folderDialog.mode === 'new' ? folderDialog.parentId : undefined}
+          options={ownedFolderOptions.filter((o) => folderDialog.mode === 'new' || !isInSubtree(data.folders, folderDialog.folder.id, o.id))}
           onClose={() => setFolderDialog(null)}
           onDone={async () => {
             setFolderDialog(null)
@@ -325,6 +375,21 @@ function PlannerRow({
       <PlannerIcon name={planner.name} color={planner.color} />
       <span className="truncate">{planner.name}</span>
     </Link>
+  )
+}
+
+function DraggableFolder({ id, enabled, children }: { id: string; enabled: boolean; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `${FOLDER_DRAG}${id}`, disabled: !enabled })
+  return (
+    <div
+      ref={setNodeRef}
+      {...(enabled ? listeners : {})}
+      {...(enabled ? attributes : {})}
+      style={transform ? { transform: `translate(${transform.x}px, ${transform.y}px)`, zIndex: 50, position: 'relative' } : undefined}
+      className={isDragging ? 'opacity-70' : ''}
+    >
+      {children}
+    </div>
   )
 }
 
@@ -427,7 +492,7 @@ function NewPlannerDialog({
   onClose,
   onCreated,
 }: {
-  folders: Folder[]
+  folders: { id: string; label: string }[]
   onClose: () => void
   onCreated: (id: string) => void
 }) {
@@ -482,7 +547,7 @@ function NewPlannerDialog({
           <select id="planner-folder" className="input" value={folderId} onChange={(e) => setFolderId(e.target.value)}>
             <option value="">Ohne Ordner</option>
             {folders.map((f) => (
-              <option key={f.id} value={f.id}>{f.name}</option>
+              <option key={f.id} value={f.id}>{f.label}</option>
             ))}
           </select>
         </div>
@@ -495,9 +560,24 @@ function NewPlannerDialog({
   )
 }
 
-function FolderNameDialog({ folder, onClose, onDone }: { folder: Folder | null; onClose: () => void; onDone: () => void }) {
+function FolderNameDialog({
+  folder,
+  initialParent,
+  options,
+  onClose,
+  onDone,
+}: {
+  folder: Folder | null
+  initialParent?: string
+  /** Mögliche Elternordner (Owner, beim Bearbeiten ohne den eigenen Teilbaum) */
+  options: { id: string; label: string }[]
+  onClose: () => void
+  onDone: () => void
+}) {
   const me = useCurrentUser()
+  const startParent = folder?.parent_id ?? initialParent ?? ''
   const [name, setName] = useState(folder?.name ?? '')
+  const [parent, setParent] = useState(startParent)
   const [busy, setBusy] = useState(false)
 
   async function submit(e: React.FormEvent) {
@@ -505,9 +585,10 @@ function FolderNameDialog({ folder, onClose, onDone }: { folder: Folder | null; 
     if (!name.trim()) return
     setBusy(true)
     const db = getBrowserClient()
+    // Elternordner nur mitschicken, wenn geändert: Er ist evtl. nicht in der Auswahl
     const { error } = folder
-      ? await db.from('folders').update({ name: name.trim() }).eq('id', folder.id)
-      : await db.from('folders').insert({ owner_id: me.id, name: name.trim() })
+      ? await db.from('folders').update({ name: name.trim(), ...(parent !== startParent ? { parent_id: parent || null } : {}) }).eq('id', folder.id)
+      : await db.from('folders').insert({ owner_id: me.id, name: name.trim(), parent_id: parent || null })
     setBusy(false)
     if (error) {
       toast('Ordner konnte nicht gespeichert werden')
@@ -517,11 +598,19 @@ function FolderNameDialog({ folder, onClose, onDone }: { folder: Folder | null; 
   }
 
   return (
-    <Modal open onClose={onClose} title={folder ? 'Ordner umbenennen' : 'Neuer Ordner'} maxWidth={400}>
+    <Modal open onClose={onClose} title={folder ? 'Ordner bearbeiten' : 'Neuer Ordner'} maxWidth={400}>
       <form onSubmit={submit} className="flex flex-col gap-4">
         <div>
           <label htmlFor="folder-name" className="field-label">Name</label>
           <input id="folder-name" className="input" autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={120} required />
+        </div>
+        <div>
+          <label htmlFor="folder-parent" className="field-label">Liegt in</label>
+          <select id="folder-parent" className="input" value={parent} onChange={(e) => setParent(e.target.value)}>
+            <option value="">Oberste Ebene</option>
+            {startParent && !options.some((o) => o.id === startParent) && <option value={startParent}>Aktueller Ordner</option>}
+            {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
         </div>
         <div className="flex justify-end gap-2">
           <button type="button" className="btn-secondary" onClick={onClose}>Abbrechen</button>

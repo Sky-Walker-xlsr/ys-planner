@@ -11,7 +11,7 @@ import {
   EMPTY_FILTERS, GROUP_BY_LABEL, activeFilterCount, matchesFilters, type Filters, type GroupBy,
 } from '@/lib/grouping'
 import { DUE_BUCKET_LABEL, type DueBucket } from '@/lib/dates'
-import { PRIORITY_LABEL, STATUS_LABEL, type Folder, type TaskPriority, type TaskStatus } from '@/lib/types'
+import { PRIORITY_LABEL, STATUS_LABEL, type Folder, type Role, type TaskPriority, type TaskStatus } from '@/lib/types'
 import { Board } from './board'
 import { Grid } from './grid'
 import { Schedule } from './schedule'
@@ -21,6 +21,7 @@ import { TaskModal } from './task-modal'
 import { request } from '@/lib/file-urls'
 import { PlannerSettingsDialog } from './planner-settings'
 import { ShareDialog } from './share-dialog'
+import { effectiveFolderRoles, folderOptions } from '@/lib/folders'
 
 const TABS = [
   { key: 'board', label: 'Board' },
@@ -197,17 +198,18 @@ function PlannerMenu() {
   const planner = state.planner!
   const [dialog, setDialog] = useState<'rename' | 'move' | 'settings' | 'delete' | null>(null)
   const [name, setName] = useState(planner.name)
-  const [folders, setFolders] = useState<Folder[]>([])
+  const [folders, setFolders] = useState<{ id: string; label: string }[]>([])
   const [target, setTarget] = useState(planner.folder_id ?? '')
 
   async function openMove() {
     setDialog('move')
-    const { data } = await db
-      .from('folder_members')
-      .select('folders(*)')
-      .eq('user_id', viewer.id)
-      .eq('role', 'owner')
-    setFolders(((data ?? []).map((r) => r.folders) as unknown as Folder[]).filter(Boolean))
+    const [{ data: fs }, { data: fm }] = await Promise.all([
+      db.from('folders').select('*').order('position'),
+      db.from('folder_members').select('folder_id, role').eq('user_id', viewer.id),
+    ])
+    const all = (fs ?? []) as Folder[]
+    const roles = effectiveFolderRoles(all, (fm ?? []) as { folder_id: string; role: Role }[])
+    setFolders(folderOptions(all).filter((o) => roles.get(o.id) === 'owner'))
   }
 
   async function save(patch: Record<string, unknown>) {
@@ -263,7 +265,7 @@ function PlannerMenu() {
             <label htmlFor="move-planner" className="field-label">Ordner</label>
             <select id="move-planner" className="input" value={target} onChange={(e) => setTarget(e.target.value)}>
               <option value="">Ohne Ordner</option>
-              {folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+              {folders.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
             </select>
           </div>
           <div className="flex justify-end gap-2">
