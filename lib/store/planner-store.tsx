@@ -318,6 +318,10 @@ export function PlannerProvider({
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'folder_members' }, () => {
       if (stateRef.current.planner?.folder_id) void reload()
     })
+    // Task in einen anderen Planner verschoben: Das Update selbst kommt hier nicht mehr an
+    channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_log', filter: `planner_id=eq.${plannerId}` }, (p) => {
+      if ((p.new as { action: string }).action === 'task_moved_out') void reload()
+    })
     // Ordner verschoben: Die geerbten Rechte können sich ändern
     channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'folders' }, () => {
       if (stateRef.current.planner?.folder_id) void reload()

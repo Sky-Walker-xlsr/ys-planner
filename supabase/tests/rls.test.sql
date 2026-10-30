@@ -456,6 +456,70 @@ update public.tasks set remind_at = now() + interval '1 hour' where id = 'e00000
 insert into rls_results (actor, label, passed, detail)
 select 'service', 'Neuer Zeitpunkt macht die Erinnerung wieder scharf', count(*) = 1, 'rows=' || count(*) from public.tasks where id = 'e0000000-0000-4000-8000-000000000001' and reminder_sent_at is null;
 
+-- Task zwischen Plannern verschieben: Owner hat P und P2, Bearbeiter nur P, Fremder nur Label-Ziel
+insert into public.tasks (id, planner_id, bucket_id, title) values
+  ('e2000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000001', 'd0000000-0000-4000-8000-000000000001', 'Umzug');
+insert into public.task_assignees (task_id, user_id) values
+  ('e2000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000001'),
+  ('e2000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000002');
+insert into public.labels (id, planner_id, name, color) values
+  ('f2000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000001', 'umzug-label', 'blue');
+insert into public.task_labels (task_id, label_id) values
+  ('e2000000-0000-4000-8000-000000000001', 'f2000000-0000-4000-8000-000000000001');
+insert into public.task_sections (id, task_id, title) values
+  ('f3000000-0000-4000-8000-000000000001', 'e2000000-0000-4000-8000-000000000001', 'Abschnitt');
+insert into public.section_items (section_id, title) values
+  ('f3000000-0000-4000-8000-000000000001', 'Punkt');
+insert into public.comments (task_id, author_user_id, body) values
+  ('e2000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000002', 'Bleibt erhalten');
+insert into public.task_files (task_id, name, size_bytes, storage_path) values
+  ('e2000000-0000-4000-8000-000000000001', 'datei.pdf', 10, '');
+insert into public.kb_files (id, planner_id, name, storage_path) values
+  ('f4000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000001', 'Umzug.md', '');
+insert into public.task_attachments (task_id, kb_file_id) values
+  ('e2000000-0000-4000-8000-000000000001', 'f4000000-0000-4000-8000-000000000001');
+
+do $$
+declare
+  mv constant text := 'select public.move_task(''e2000000-0000-4000-8000-000000000001'', ''c0000000-0000-4000-8000-000000000002'', ''d0000000-0000-4000-8000-000000000002'')';
+  own jsonb := pg_temp.user_claims('a0000000-0000-4000-8000-000000000001');
+begin
+  perform pg_temp.check('editor', pg_temp.user_claims('a0000000-0000-4000-8000-000000000002'), 'Verschieben: ohne Rechte im Ziel verboten', 'cannot', mv);
+  perform pg_temp.check('viewer', pg_temp.user_claims('a0000000-0000-4000-8000-000000000003'), 'Verschieben: Leser verboten', 'cannot', mv);
+  perform pg_temp.check('stranger', pg_temp.user_claims('a0000000-0000-4000-8000-000000000005'), 'Verschieben: Fremde verboten', 'cannot', mv);
+  perform pg_temp.check('guest-edit', pg_temp.guest_claims('a1000000-0000-4000-8000-000000000002', '90000000-0000-4000-8000-000000000002', 'c0000000-0000-4000-8000-000000000001', 'edit', 'Gast'), 'Verschieben: Gäste verboten', 'cannot', mv);
+  perform pg_temp.check('owner', own, 'Verschieben: Owner beider Planner darf', 'can', mv);
+  perform pg_temp.check('owner', own, 'Verschieben: Bucket eines anderen Planners verboten', 'cannot', 'select public.move_task(''e2000000-0000-4000-8000-000000000001'', ''c0000000-0000-4000-8000-000000000002'', ''d0000000-0000-4000-8000-000000000001'')');
+  perform pg_temp.check('owner', own, 'Verschieben: planner_id direkt ändern bleibt verboten', 'cannot', 'update public.tasks set planner_id = ''c0000000-0000-4000-8000-000000000002'', bucket_id = ''d0000000-0000-4000-8000-000000000002'' where id = ''e2000000-0000-4000-8000-000000000001''');
+end
+$$;
+
+-- Wirkung als Owner ausführen und prüfen
+select set_config('request.jwt.claims', pg_temp.user_claims('a0000000-0000-4000-8000-000000000001')::text, true);
+create temp table move_result on commit drop as select public.move_task('e2000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000002', 'd0000000-0000-4000-8000-000000000002') as r;
+select set_config('request.jwt.claims', '', true);
+insert into rls_results (actor, label, passed, detail)
+select 'owner', 'Verschieben: meldet entfernte Zuweisung und KB-Anhang', (r->>'removed_assignees')::int = 1 and (r->>'removed_attachments')::int = 1, r::text from move_result;
+insert into rls_results (actor, label, passed, detail)
+select 'owner', 'Verschieben: Task liegt im Ziel', count(*) = 1, 'rows=' || count(*) from public.tasks where id = 'e2000000-0000-4000-8000-000000000001' and planner_id = 'c0000000-0000-4000-8000-000000000002' and bucket_id = 'd0000000-0000-4000-8000-000000000002';
+insert into rls_results (actor, label, passed, detail)
+select 'owner', 'Verschieben: Zuweisung mit Zugriff bleibt, ohne fällt weg', count(*) = 1 and bool_and(user_id = 'a0000000-0000-4000-8000-000000000001' and planner_id = 'c0000000-0000-4000-8000-000000000002'), 'rows=' || count(*) from public.task_assignees where task_id = 'e2000000-0000-4000-8000-000000000001';
+insert into rls_results (actor, label, passed, detail)
+select 'owner', 'Verschieben: Label wird im Ziel angelegt', count(*) = 1, 'rows=' || count(*) from public.task_labels tl join public.labels l on l.id = tl.label_id where tl.task_id = 'e2000000-0000-4000-8000-000000000001' and l.name = 'umzug-label' and l.planner_id = 'c0000000-0000-4000-8000-000000000002' and tl.planner_id = 'c0000000-0000-4000-8000-000000000002';
+insert into rls_results (actor, label, passed, detail)
+select 'owner', 'Verschieben: Abschnitt, Punkt, Kommentar und Datei ziehen mit',
+  (select count(*) from public.task_sections where id = 'f3000000-0000-4000-8000-000000000001' and planner_id = 'c0000000-0000-4000-8000-000000000002') = 1
+  and (select count(*) from public.section_items where section_id = 'f3000000-0000-4000-8000-000000000001' and planner_id = 'c0000000-0000-4000-8000-000000000002') = 1
+  and (select count(*) from public.comments where task_id = 'e2000000-0000-4000-8000-000000000001' and planner_id = 'c0000000-0000-4000-8000-000000000002') = 1
+  and (select count(*) from public.task_files where task_id = 'e2000000-0000-4000-8000-000000000001' and planner_id = 'c0000000-0000-4000-8000-000000000002') = 1, '';
+insert into rls_results (actor, label, passed, detail)
+select 'owner', 'Verschieben: KB-Datei bleibt im alten Planner', count(*) = 1, 'rows=' || count(*) from public.kb_files where id = 'f4000000-0000-4000-8000-000000000001' and planner_id = 'c0000000-0000-4000-8000-000000000001';
+insert into rls_results (actor, label, passed, detail)
+select 'owner', 'Verschieben: Hinweis im alten Planner', count(*) = 1, 'rows=' || count(*) from public.activity_log where planner_id = 'c0000000-0000-4000-8000-000000000001' and action = 'task_moved_out';
+select set_config('app.task_move', '', true);
+insert into rls_results (actor, label, passed, detail)
+select 'owner', 'Verschieben: Marker ist danach wieder aus', not app.task_moving(), '';
+
 select actor, label, passed, detail from rls_results order by n;
 
 rollback;

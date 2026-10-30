@@ -19,6 +19,7 @@ Planner-Web-App im Stil von MS Planner: Boards mit Buckets, Raster, Zeitplan, Di
 | Dateien | Cloudflare R2 (Binding `FILES`, Bucket `planner-files`). R2 hat kein RLS: Jeder Zugriff läuft über Route Handler, die die Metadaten-Zeile mit dem JWT des Aufrufers lesen (RLS) und `planner_role()` prüfen, also dieselbe Logik wie die Policies, inklusive Gast-Claims. Metadaten liegen in Postgres. |
 | Service-Role | Nur serverseitig: Login, Share-Link-Erstellung/-Prüfung, Mailversand, Cron. |
 | Ordner | Ordner können verschachtelt sein. Freigaben gelten für den Ordner und alles darunter, die höchste Rolle der Kette zählt. Wer nur einen Unterordner hat, sieht den Elternordner nicht, aber dessen Mitglieder. |
+| Task verschieben | `public.move_task` verschiebt einen Task in einer Transaktion in einen anderen Planner (Rolle ≥ editor in beiden). Abschnitte, Kommentare und Dateien ziehen mit, Labels gehen über den Namen ins Ziel. Zuweisungen ohne Zugriff im Ziel und Knowledge-Base-Anhänge fallen weg. |
 | Benachrichtigungen | Zuweisen, Kommentare und Einladungen laufen über Route-Handler (mit User-JWT, RLS aktiv). Die Mail geht danach per `after()` raus. Fälligkeiten: Cron Trigger. |
 
 ### Entscheidung: eigene JWTs mit Supabase JWT Signing Keys

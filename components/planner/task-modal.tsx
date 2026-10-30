@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Calendar, Check, ChevronDown, ChevronRight, FileText, GripVertical, ImageIcon, Link2, Paperclip, Plus, Trash2, Upload, X } from 'lucide-react'
+import { ArrowRightToLine, Calendar, Check, ChevronDown, ChevronRight, FileText, GripVertical, ImageIcon, Link2, Paperclip, Plus, Trash2, Upload, X } from 'lucide-react'
 import { usePlanner, positionBetween, sortByPosition, useTaskIndex } from '@/lib/store/planner-store'
 import { Modal } from '@/components/ui/modal'
 import { UserAvatar, shortName } from '@/components/ui/avatar'
@@ -16,10 +16,11 @@ import { PRIORITY_LABEL, STATUS_LABEL, type KbFile, type SectionItem, type TaskF
 import { taskFileUrl } from '@/lib/file-urls'
 import { highlight, normalize, searchTerms } from '@/lib/search'
 import { Marked } from './kb-search'
+import { MoveTaskDialog } from './move-task-dialog'
 import { useActions } from './use-actions'
 
 export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onClose: () => void; onOpenFile: (id: string) => void }) {
-  const { state, canEdit, setPresence, presence } = usePlanner()
+  const { state, canEdit, viewer, apply, setPresence, presence } = usePlanner()
   const index = useTaskIndex()
   const t = index.get(taskId)!
   const task = t.task
@@ -28,6 +29,7 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
   // Eingang: nur Kernfelder (kein Bucket, keine Zuweisungen/Labels/Abschnitte/Kommentare/KB)
   const inbox = task.planner_id === null
   const editingHere = presence.filter((p) => p.taskId === taskId)
+  const [moving, setMoving] = useState(false)
 
   useEffect(() => {
     setPresence({ taskId })
@@ -116,6 +118,15 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
           {!inbox && <Sections taskId={task.id} sections={t.sections} itemsDone={t.itemsDone} itemsTotal={t.itemsTotal} />}
 
           <Attachments taskId={task.id} onOpenFile={onOpenFile} withKnowledgeBase={!inbox} />
+
+          {canEdit && !inbox && viewer.kind === 'user' && (
+            <button type="button" className="btn-text mt-6" onClick={() => setMoving(true)}>
+              <ArrowRightToLine size={15} /> In anderen Planner verschieben
+            </button>
+          )}
+          {moving && (
+            <MoveTaskDialog task={task} onClose={() => setMoving(false)} onMoved={() => { onClose(); apply('delete', 'tasks', [task]) }} />
+          )}
 
           {canEdit && <DeleteTask taskId={task.id} onDeleted={onClose} />}
         </div>
