@@ -39,15 +39,35 @@ export function MyTasks() {
   const [sort, setSort] = useState<MyTasksSort>('due')
   const [grouped, setGrouped] = useState(true)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Zählt eigene Änderungen: Ein Ladevorgang, der davor begann, darf sie nicht überschreiben
+  const localVersion = useRef(0)
 
   const load = useCallback(async () => {
-    const { data } = await db
+    const version = localVersion.current
+    const { data, error } = await db
       .from('task_assignees')
       .select('tasks!inner(id, title, status, priority, due_date, planner_id, planners(name, color))')
       .eq('user_id', me.id)
       .neq('tasks.status', 'done')
-    setRows(((data ?? []) as unknown as { tasks: Row }[]).map((r) => r.tasks))
+    if (error || version !== localVersion.current) return
+    const next = ((data ?? []) as unknown as { tasks: Row }[]).map((r) => r.tasks)
+    setRows((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
   }, [db, me.id])
+
+  // Alle 5 Sekunden und beim Zurückkehren in den Tab aktualisieren
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === 'visible') void load()
+    }
+    const id = setInterval(tick, 5000)
+    document.addEventListener('visibilitychange', tick)
+    window.addEventListener('focus', tick)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', tick)
+      window.removeEventListener('focus', tick)
+    }
+  }, [load])
 
   // Gespeicherte Sortierung/Gruppierung
   useEffect(() => {
@@ -101,6 +121,7 @@ export function MyTasks() {
   async function move(id: string, dueDate: string) {
     const prev = rows?.find((r) => r.id === id)
     if (!prev) return
+    localVersion.current++
     setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, due_date: dueDate } : r)) ?? rs)
     const { data, error } = await db.from('tasks').update({ due_date: dueDate }).eq('id', id).select('id')
     if (error || !data?.length) {
@@ -109,15 +130,17 @@ export function MyTasks() {
     }
   }
 
-  // Abhaken: nur in Plannern mit Bearbeitungsrecht (RLS liefert sonst keine Zeile zurück)
+  // Abhaken: nur in Plannern mit Bearbeitungsrecht (RLS liefert sonst keine Zeile zurück).
+  // Erledigte Tasks erscheinen hier nicht, die Zeile verschwindet sofort.
   async function toggleDone(id: string) {
     const prev = rows?.find((r) => r.id === id)
     if (!prev) return
+    localVersion.current++
     const status = toggledStatus(prev.status)
-    setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, status } : r)) ?? rs)
+    setRows((rs) => (status === 'done' ? rs?.filter((r) => r.id !== id) : rs?.map((r) => (r.id === id ? { ...r, status } : r))) ?? rs)
     const { data, error } = await db.from('tasks').update({ status }).eq('id', id).select('id')
     if (error || !data?.length) {
-      setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, status: prev.status } : r)) ?? rs)
+      setRows((rs) => (rs ? [...rs.filter((r) => r.id !== id), prev] : rs))
       toast(error ? 'Aufgabe konnte nicht geändert werden' : 'Keine Bearbeitungsrechte in diesem Planner')
     }
   }

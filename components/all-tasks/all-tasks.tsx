@@ -22,7 +22,7 @@ const SELECT = 'id, title, status, priority, due_date, planner_id, planners(name
 
 type View = 'list' | 'schedule'
 
-/** Alle Tasks aller sichtbaren Planner (RLS), filterbar und unabhängig von Buckets */
+/** Alle offenen Tasks aller sichtbaren Planner (RLS), filterbar und unabhängig von Buckets. Erledigte nur im Planner. */
 export function AllTasks() {
   const db = getBrowserClient()
   const router = useRouter()
@@ -34,12 +34,15 @@ export function AllTasks() {
   const [sort, setSort] = useState<MyTasksSort>('due')
   const [grouping, setGrouping] = useState<AllTaskGrouping>('due')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Zählt eigene Änderungen: Ein Ladevorgang, der davor begann, darf sie nicht überschreiben
+  const localVersion = useRef(0)
 
   const load = useCallback(async () => {
+    const version = localVersion.current
     // Supabase liefert höchstens 1000 Zeilen pro Abfrage
     const all: AllTaskRow[] = []
     for (let from = 0; ; from += PAGE) {
-      const { data, error } = await db.from('tasks').select(SELECT).not('planner_id', 'is', null).order('id').range(from, from + PAGE - 1)
+      const { data, error } = await db.from('tasks').select(SELECT).not('planner_id', 'is', null).neq('status', 'done').order('id').range(from, from + PAGE - 1)
       if (error) {
         toast('Aufgaben konnten nicht geladen werden')
         return
@@ -47,13 +50,29 @@ export function AllTasks() {
       all.push(...((data ?? []) as unknown as AllTaskRow[]))
       if (!data || data.length < PAGE) break
     }
-    setRows(all)
+    if (version !== localVersion.current) return
+    setRows((prev) => (prev && JSON.stringify(prev) === JSON.stringify(all) ? prev : all))
     const ids = [...new Set(all.flatMap((r) => r.task_assignees.map((a) => a.user_id)))]
     if (ids.length) {
       const { data } = await db.from('users').select('id, email, display_name, avatar_color').in('id', ids)
       setUsers(new Map(((data ?? []) as User[]).map((u) => [u.id, u])))
     }
   }, [db])
+
+  // Alle 5 Sekunden und beim Zurückkehren in den Tab aktualisieren
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === 'visible') void load()
+    }
+    const id = setInterval(tick, 5000)
+    document.addEventListener('visibilitychange', tick)
+    window.addEventListener('focus', tick)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', tick)
+      window.removeEventListener('focus', tick)
+    }
+  }, [load])
 
   useEffect(() => {
     void load()
@@ -104,6 +123,7 @@ export function AllTasks() {
   async function move(id: string, dueDate: string) {
     const prev = rows?.find((r) => r.id === id)
     if (!prev) return
+    localVersion.current++
     setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, due_date: dueDate } : r)) ?? rs)
     const { data, error } = await db.from('tasks').update({ due_date: dueDate }).eq('id', id).select('id')
     if (error || !data?.length) {
@@ -112,15 +132,17 @@ export function AllTasks() {
     }
   }
 
-  // Abhaken: nur in Plannern mit Bearbeitungsrecht (RLS liefert sonst keine Zeile zurück)
+  // Abhaken: nur in Plannern mit Bearbeitungsrecht (RLS liefert sonst keine Zeile zurück).
+  // Erledigte Tasks erscheinen hier nicht, die Zeile verschwindet sofort.
   async function toggleDone(id: string) {
     const prev = rows?.find((r) => r.id === id)
     if (!prev) return
+    localVersion.current++
     const status = toggledStatus(prev.status)
-    setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, status } : r)) ?? rs)
+    setRows((rs) => (status === 'done' ? rs?.filter((r) => r.id !== id) : rs?.map((r) => (r.id === id ? { ...r, status } : r))) ?? rs)
     const { data, error } = await db.from('tasks').update({ status }).eq('id', id).select('id')
     if (error || !data?.length) {
-      setRows((rs) => rs?.map((r) => (r.id === id ? { ...r, status: prev.status } : r)) ?? rs)
+      setRows((rs) => (rs ? [...rs.filter((r) => r.id !== id), prev] : rs))
       toast(error ? 'Aufgabe konnte nicht geändert werden' : 'Keine Bearbeitungsrechte in diesem Planner')
     }
   }
@@ -133,7 +155,7 @@ export function AllTasks() {
         <div className="min-w-0 flex-1">
           <h1 className="text-lg font-semibold">Alle Tasks</h1>
           <p className="text-sm text-text-2">
-            {rows === null ? 'Tasks aus allen Plannern' : `${filtered.length} von ${rows.length} Tasks aus allen Plannern`}
+            {rows === null ? 'Offene Tasks aus allen Plannern' : `${filtered.length} von ${rows.length} offenen Tasks aus allen Plannern`}
           </p>
         </div>
         <Segmented label="Ansicht" value={view} onChange={setView} options={[{ value: 'list', label: 'Liste' }, { value: 'schedule', label: 'Zeitplan' }]} />
@@ -146,7 +168,7 @@ export function AllTasks() {
         </div>
         <MultiFilter title="Planner" options={options.planners} value={filters.planners} onChange={(v) => set('planners', v)} />
         <MultiFilter title="Status" value={filters.statuses} onChange={(v) => set('statuses', v as TaskStatus[])}
-          options={(Object.keys(STATUS_LABEL) as TaskStatus[]).map((s) => ({ value: s, label: STATUS_LABEL[s] }))} />
+          options={(Object.keys(STATUS_LABEL) as TaskStatus[]).filter((s) => s !== 'done').map((s) => ({ value: s, label: STATUS_LABEL[s] }))} />
         <MultiFilter title="Priorität" value={filters.priorities} onChange={(v) => set('priorities', v as TaskPriority[])}
           options={(Object.keys(PRIORITY_LABEL) as TaskPriority[]).map((p) => ({ value: p, label: PRIORITY_LABEL[p] }))} />
         <MultiFilter title="Zugewiesen" options={options.assignees} value={filters.assignees} onChange={(v) => set('assignees', v)} />

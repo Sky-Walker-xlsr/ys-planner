@@ -30,22 +30,30 @@ type Rows = {
 }
 export type TableName = keyof Rows
 
-const KEYS: { [T in TableName]: (r: Rows[T]) => string } = {
-  buckets: (r) => r.id,
-  labels: (r) => r.id,
-  tasks: (r) => r.id,
-  task_assignees: (r) => `${r.task_id}:${r.user_id}`,
-  task_labels: (r) => `${r.task_id}:${r.label_id}`,
-  task_sections: (r) => r.id,
-  section_items: (r) => r.id,
-  comments: (r) => r.id,
-  kb_files: (r) => r.id,
-  task_attachments: (r) => `${r.task_id}:${r.kb_file_id}`,
-  task_files: (r) => r.id,
-  user_tags: (r) => `${r.task_id}:${r.name}`,
-  planner_members: (r) => `${r.planner_id}:${r.user_id}`,
-  folder_members: (r) => `${r.folder_id}:${r.user_id}`,
+/** Primärschlüssel je Tabelle: für den Store-Schlüssel und um einzelne Zeilen nachzuladen */
+const PKS: { [T in TableName]: (keyof Rows[T] & string)[] } = {
+  buckets: ['id'],
+  labels: ['id'],
+  tasks: ['id'],
+  task_assignees: ['task_id', 'user_id'],
+  task_labels: ['task_id', 'label_id'],
+  task_sections: ['id'],
+  section_items: ['id'],
+  comments: ['id'],
+  kb_files: ['id'],
+  task_attachments: ['task_id', 'kb_file_id'],
+  task_files: ['id'],
+  user_tags: ['task_id', 'name'],
+  planner_members: ['planner_id', 'user_id'],
+  folder_members: ['folder_id', 'user_id'],
 }
+
+const KEYS = Object.fromEntries(
+  Object.entries(PKS).map(([t, cols]) => [t, (r: Record<string, unknown>) => cols.map((c) => String(r[c])).join(':')]),
+) as unknown as { [T in TableName]: (r: Rows[T]) => string }
+
+/** Wie lange nach einer eigenen Änderung fremde Events für dieselbe Zeile zurückgehalten werden */
+const ECHO_WINDOW_MS = 1500
 
 const PLANNER_TABLES: TableName[] = [
   'buckets', 'labels', 'tasks', 'task_assignees', 'task_labels', 'task_sections',
@@ -69,6 +77,8 @@ type Action =
   | { type: 'users'; users: User[] }
   | { type: 'upsert'; table: TableName; rows: unknown[] }
   | { type: 'delete'; table: TableName; rows: unknown[] }
+  /** Frisch geladene Zeilen: ersetzt alle Zeilen im Bereich inScope, geschützte Schlüssel bleiben lokal */
+  | { type: 'replace'; table: TableName; rows: unknown[]; inScope: (row: unknown) => boolean; protect: (key: string) => boolean }
 
 function emptyCollections(): Collections {
   return Object.fromEntries(Object.keys(KEYS).map((t) => [t, {}])) as Collections
@@ -86,6 +96,30 @@ function reducer(state: State, action: Action): State {
       const users = { ...state.users }
       for (const u of action.users) users[u.id] = u
       return { ...state, users }
+    }
+    case 'replace': {
+      const key = KEYS[action.table] as (r: unknown) => string
+      const old = state.data[action.table] as Record<string, unknown>
+      const next: Record<string, unknown> = {}
+      let changed = false
+      for (const [k, row] of Object.entries(old)) {
+        if (!action.inScope(row) || action.protect(k)) next[k] = row
+        else changed = true // fällt weg, falls nicht neu geladen
+      }
+      for (const row of action.rows) {
+        const k = key(row)
+        if (action.protect(k) && k in old) continue
+        const prev = old[k]
+        // Unveränderte Zeilen behalten ihr Objekt, damit nichts unnötig neu rendert
+        if (prev !== undefined && JSON.stringify(prev) === JSON.stringify({ ...(prev as object), ...(row as object) })) {
+          next[k] = prev
+        } else {
+          next[k] = row
+          changed = true
+        }
+      }
+      if (!changed && Object.keys(next).length === Object.keys(old).length) return state
+      return { ...state, data: { ...state.data, [action.table]: next } }
     }
     case 'upsert':
     case 'delete': {
@@ -121,9 +155,15 @@ type Ctx = {
   isOwner: boolean
   members: Member[]
   apply: (type: 'upsert' | 'delete', table: TableName, rows: unknown[]) => void
+  /** Gespeicherte Planner-Zeile sofort übernehmen (nicht erst, wenn das Realtime-Event ankommt) */
+  setPlanner: (planner: Planner) => void
   /** Führt eine Mutation optimistisch aus: lokal anwenden, dann DB; bei Fehler neu laden. */
   mutate: (local: () => void, remote: () => PromiseLike<{ error: unknown }>, message?: string) => Promise<boolean>
   reload: () => Promise<void>
+  /** Sichtbare Daten im Hintergrund neu laden (ohne Ladezustand) */
+  refresh: () => Promise<void>
+  /** Eine Task mit allem, was dazugehört, frisch laden */
+  refreshTask: (taskId: string) => Promise<void>
   presence: PresenceEntry[]
   setPresence: (p: { taskId?: string | null; kbFileId?: string | null }) => void
   broadcast: (event: string, payload: Record<string, unknown>) => void
@@ -248,6 +288,167 @@ export function PlannerProvider({
     void reload()
   }, [reload])
 
+  // -------------------------------------------------------------------------
+  // Eigene Änderungen gegen verspätete Echos schützen
+  //
+  // Solange eine eigene Änderung an einer Zeile läuft und kurz danach, werden Events für diese
+  // Zeile nicht angewendet: Sonst überschreibt das Echo einer älteren Änderung eine neuere lokale.
+  // Kam in dieser Zeit ein Event, wird die Zeile danach frisch aus der Datenbank geladen.
+  // -------------------------------------------------------------------------
+  type Guard = { pending: number; until: number; stale: boolean; table: TableName; row: unknown }
+  const guards = useRef(new Map<string, Guard>())
+  const recording = useRef<{ table: TableName; row: unknown }[] | null>(null)
+  /** Zeitpunkt der letzten eigenen Änderung je Zeile: Ältere Ladevorgänge dürfen sie nicht überschreiben */
+  const touchedAt = useRef(new Map<string, number>())
+
+  const refetchRow = useCallback(
+    async (table: TableName, row: unknown) => {
+      const match = Object.fromEntries(PKS[table].map((c) => [c, (row as Record<string, unknown>)[c]]))
+      const { data, error } = await db.from(table).select('*').match(match).maybeSingle()
+      if (error) return
+      if (data) dispatch({ type: 'upsert', table, rows: [data] })
+      else dispatch({ type: 'delete', table, rows: [row] })
+    },
+    [db],
+  )
+
+  const releaseGuard = useCallback(
+    (k: string) => {
+      const g = guards.current.get(k)
+      if (!g) return
+      g.pending = Math.max(0, g.pending - 1)
+      if (g.pending > 0) return
+      g.until = Date.now() + ECHO_WINDOW_MS
+      setTimeout(() => {
+        const cur = guards.current.get(k)
+        if (!cur || cur.pending > 0 || Date.now() < cur.until) return
+        guards.current.delete(k)
+        if (cur.stale) void refetchRow(cur.table, cur.row)
+      }, ECHO_WINDOW_MS + 20)
+    },
+    [refetchRow],
+  )
+
+  /** Event von aussen (Broadcast oder Postgres Changes) für eine Zeile anwenden */
+  const applyRemote = useCallback((op: 'upsert' | 'delete', table: TableName, row: unknown) => {
+    const k = `${table}|${(KEYS[table] as (r: unknown) => string)(row)}`
+    const g = guards.current.get(k)
+    if (g && (g.pending > 0 || Date.now() < g.until)) {
+      g.stale = true
+      g.row = row
+      return
+    }
+    if (op === 'delete' && !(stateRef.current.data[table] as Record<string, unknown>)[k.slice(table.length + 1)]) return
+    dispatch({ type: op, table, rows: [row] })
+  }, [])
+
+  const reloadRef = useRef(reload)
+  useEffect(() => {
+    reloadRef.current = reload
+  }, [reload])
+
+  /** Schlüssel mit laufender oder gerade gespeicherter eigener Änderung nicht überschreiben */
+  const isProtected = useCallback(
+    (table: TableName, since: number) => (key: string) => {
+      const k = `${table}|${key}`
+      const g = guards.current.get(k)
+      if (g && (g.pending > 0 || Date.now() < g.until)) return true
+      return (touchedAt.current.get(k) ?? 0) >= since
+    },
+    [],
+  )
+
+  /** since: Start des Ladevorgangs. Danach lokal geänderte Zeilen bleiben unangetastet. */
+  const replace = useCallback(
+    (table: TableName, rows: unknown[] | null, since: number, inScope: (row: unknown) => boolean = () => true) => {
+      if (!rows) return // Fehler beim Laden: lieber nichts löschen
+      dispatch({ type: 'replace', table, rows, inScope, protect: isProtected(table, since) })
+    },
+    [isProtected],
+  )
+
+  const refreshing = useRef(false)
+  const refresh = useCallback(async () => {
+    if (refreshing.current || !stateRef.current.loaded) return
+    refreshing.current = true
+    const since = Date.now()
+    try {
+      if (plannerId === null) {
+        const { data: tasks } = await db.from('tasks').select('*').is('planner_id', null).eq('owner_id', viewer.id)
+        const ids = (tasks ?? []).map((t) => t.id as string)
+        const [{ data: files }, { data: tags }] = await Promise.all([
+          ids.length ? db.from('task_files').select('*').in('task_id', ids) : Promise.resolve({ data: [] }),
+          db.from('user_tags').select('*').eq('user_id', viewer.id),
+        ])
+        replace('tasks', tasks, since)
+        replace('task_files', files, since)
+        replace('user_tags', tags, since)
+        return
+      }
+      const [{ data: planner }, ...results] = await Promise.all([
+        db.from('planners').select('*').eq('id', plannerId).maybeSingle<Planner>(),
+        ...PLANNER_TABLES.map((t) => db.from(t).select('*').eq('planner_id', plannerId)),
+      ])
+      if (!planner) return void reloadRef.current()
+      const prev = stateRef.current.planner
+      if (JSON.stringify(prev) !== JSON.stringify(planner)) dispatch({ type: 'planner', planner })
+      if (prev && prev.folder_id !== planner.folder_id) return void reloadRef.current()
+      PLANNER_TABLES.forEach((t, i) => replace(t, results[i].error ? null : results[i].data, since))
+    } finally {
+      refreshing.current = false
+    }
+  }, [db, plannerId, viewer.id, replace])
+
+  const refreshTask = useCallback(
+    async (taskId: string) => {
+      const since = Date.now()
+      const byTask = (r: unknown) => (r as { task_id: string }).task_id === taskId
+      const [task, assignees, labels, sections, comments, attachments, files, tags] = await Promise.all([
+        db.from('tasks').select('*').eq('id', taskId),
+        db.from('task_assignees').select('*').eq('task_id', taskId),
+        db.from('task_labels').select('*').eq('task_id', taskId),
+        db.from('task_sections').select('*').eq('task_id', taskId),
+        db.from('comments').select('*').eq('task_id', taskId),
+        db.from('task_attachments').select('*').eq('task_id', taskId),
+        db.from('task_files').select('*').eq('task_id', taskId),
+        plannerId === null ? db.from('user_tags').select('*').eq('task_id', taskId) : Promise.resolve({ data: null, error: null }),
+      ])
+      const sectionIds = new Set<string>([
+        ...((sections.data ?? []) as TaskSection[]).map((s) => s.id),
+        ...Object.values(stateRef.current.data.task_sections).filter((s) => s.task_id === taskId).map((s) => s.id),
+      ])
+      const items = sectionIds.size
+        ? await db.from('section_items').select('*').in('section_id', [...sectionIds])
+        : { data: [], error: null }
+      const ok = <T,>(r: { data: T[] | null; error: unknown }) => (r.error ? null : r.data)
+      replace('tasks', ok(task), since, (r) => (r as Task).id === taskId)
+      replace('task_assignees', ok(assignees), since, byTask)
+      replace('task_labels', ok(labels), since, byTask)
+      replace('task_sections', ok(sections), since, byTask)
+      replace('section_items', ok(items), since, (r) => sectionIds.has((r as SectionItem).section_id))
+      replace('comments', ok(comments), since, byTask)
+      replace('task_attachments', ok(attachments), since, byTask)
+      replace('task_files', ok(files), since, byTask)
+      if (plannerId === null) replace('user_tags', ok(tags), since, byTask)
+    },
+    [db, plannerId, replace],
+  )
+
+  // Alle 5 Sekunden und beim Zurückkehren in den Tab: sichtbare Daten aktualisieren
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    const id = setInterval(tick, 5000)
+    document.addEventListener('visibilitychange', tick)
+    window.addEventListener('focus', tick)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', tick)
+      window.removeEventListener('focus', tick)
+    }
+  }, [refresh])
+
   // Postgres Changes im Eingang: eigene Tasks und Tags; verschobene Tasks verschwinden
   useEffect(() => {
     if (!inbox) return
@@ -256,11 +457,11 @@ export function PlannerProvider({
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `owner_id=eq.${viewer.id}` }, (p) => {
       const row = p.new as Task
       if (p.eventType === 'DELETE') {
-        if (stateRef.current.data.tasks[(p.old as Task).id]) dispatch({ type: 'delete', table: 'tasks', rows: [p.old] })
+        applyRemote('delete', 'tasks', p.old)
       } else if (row.planner_id) {
-        dispatch({ type: 'delete', table: 'tasks', rows: [row] })
+        applyRemote('delete', 'tasks', row)
       } else {
-        dispatch({ type: 'upsert', table: 'tasks', rows: [row] })
+        applyRemote('upsert', 'tasks', row)
         // Mail-Tasks: Anhänge und Tags werden kurz nach dem Task gespeichert
         if (p.eventType === 'INSERT') {
           if (timer) clearTimeout(timer)
@@ -269,58 +470,24 @@ export function PlannerProvider({
       }
     })
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'user_tags', filter: `user_id=eq.${viewer.id}` }, (p) => {
-      if (p.eventType === 'DELETE') dispatch({ type: 'delete', table: 'user_tags', rows: [p.old] })
-      else dispatch({ type: 'upsert', table: 'user_tags', rows: [p.new] })
+      applyRemote(p.eventType === 'DELETE' ? 'delete' : 'upsert', 'user_tags', p.eventType === 'DELETE' ? p.old : p.new)
     })
     channel.on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'task_files' }, (p) => {
-      if (stateRef.current.data.task_files[(p.old as TaskFile).id]) dispatch({ type: 'delete', table: 'task_files', rows: [p.old] })
+      applyRemote('delete', 'task_files', p.old)
     })
     channel.subscribe()
     return () => {
       if (timer) clearTimeout(timer)
       void db.removeChannel(channel)
     }
-  }, [db, inbox, viewer.id, reloadInbox])
+  }, [db, inbox, viewer.id, reloadInbox, applyRemote])
 
-  // Postgres Changes
+  // Postgres Changes nur noch für Ordnerrechte; alles im Planner kommt per Broadcast
   useEffect(() => {
     if (plannerId === null) return
     const channel = db.channel(`db:planner:${plannerId}`)
-    for (const table of PLANNER_TABLES) {
-      channel.on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table, filter: `planner_id=eq.${plannerId}` },
-        (p) => dispatch({ type: 'upsert', table, rows: [p.new] }),
-      )
-      channel.on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table, filter: `planner_id=eq.${plannerId}` },
-        (p) => dispatch({ type: 'upsert', table, rows: [p.new] }),
-      )
-      // DELETE-Events lassen sich nicht filtern; es kommt nur der Primärschlüssel
-      channel.on('postgres_changes', { event: 'DELETE', schema: 'public', table }, (p) => {
-        const key = KEYS[table] as (r: unknown) => string
-        if (stateRef.current.data[table][key(p.old)]) dispatch({ type: 'delete', table, rows: [p.old] })
-      })
-    }
-    channel.on(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'planners', filter: `id=eq.${plannerId}` },
-      (p) => {
-        const prev = stateRef.current.planner
-        dispatch({ type: 'planner', planner: p.new as Planner })
-        if (prev && prev.folder_id !== (p.new as Planner).folder_id) void reload()
-      },
-    )
-    channel.on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'planners' }, (p) => {
-      if ((p.old as { id: string }).id === plannerId) void reload()
-    })
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'folder_members' }, () => {
       if (stateRef.current.planner?.folder_id) void reload()
-    })
-    // Task in einen anderen Planner verschoben: Das Update selbst kommt hier nicht mehr an
-    channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_log', filter: `planner_id=eq.${plannerId}` }, (p) => {
-      if ((p.new as { action: string }).action === 'task_moved_out') void reload()
     })
     // Ordner verschoben: Die geerbten Rechte können sich ändern
     channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'folders' }, () => {
@@ -362,11 +529,29 @@ export function PlannerProvider({
       }
       setPresenceState(list)
     })
+    // Änderungen aus der Datenbank (Trigger app.tg_broadcast_planner)
+    channel.on('broadcast', { event: 'db' }, ({ payload }) => {
+      const { op, table, row } = payload as { op: 'INSERT' | 'UPDATE' | 'DELETE'; table: string; row: Record<string, unknown> }
+      if (table === 'planners') {
+        if (op === 'DELETE') return void reloadRef.current()
+        const prev = stateRef.current.planner
+        dispatch({ type: 'planner', planner: row as unknown as Planner })
+        if (prev && prev.folder_id !== row.folder_id) void reloadRef.current()
+        return
+      }
+      if (!(PLANNER_TABLES as string[]).includes(table)) return
+      applyRemote(op === 'DELETE' ? 'delete' : 'upsert', table as TableName, row)
+    })
     channel.on('broadcast', { event: '*' }, ({ event, payload }) => {
+      if (event === 'db') return
       broadcastHandlers.current.get(event)?.forEach((fn) => fn(payload as Record<string, unknown>))
     })
+    let joined = false
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
+        // Nach einem Verbindungsabbruch fehlen Events: einmal alles neu laden
+        if (joined) void reloadRef.current()
+        joined = true
         void channel.track({
           name: viewer.name,
           color: viewer.kind === 'user' ? viewer.color : '#5F6670',
@@ -379,7 +564,7 @@ export function PlannerProvider({
       presenceChannel.current = null
       void db.removeChannel(channel)
     }
-  }, [db, plannerId, viewer])
+  }, [db, plannerId, viewer, applyRemote])
 
   const setPresence = useCallback(
     (p: { taskId?: string | null; kbFileId?: string | null }) => {
@@ -407,13 +592,42 @@ export function PlannerProvider({
   }, [])
 
   const apply = useCallback((type: 'upsert' | 'delete', table: TableName, rows: unknown[]) => {
+    const key = KEYS[table] as (r: unknown) => string
+    for (const row of rows) {
+      recording.current?.push({ table, row })
+      touchedAt.current.set(`${table}|${key(row)}`, Date.now())
+    }
     dispatch({ type, table, rows })
   }, [])
 
+  const setPlanner = useCallback((planner: Planner) => dispatch({ type: 'planner', planner }), [])
+
   const mutate = useCallback(
     async (local: () => void, remote: () => PromiseLike<{ error: unknown }>, message = 'Änderung konnte nicht gespeichert werden') => {
-      local()
-      const { error } = await remote()
+      // Welche Zeilen ändert local()? Diese bis kurz nach dem Speichern vor Echos schützen
+      const touched: { table: TableName; row: unknown }[] = []
+      recording.current = touched
+      try {
+        local()
+      } finally {
+        recording.current = null
+      }
+      const keys: string[] = []
+      for (const { table, row } of touched) {
+        const k = `${table}|${(KEYS[table] as (r: unknown) => string)(row)}`
+        const g = guards.current.get(k) ?? { pending: 0, until: 0, stale: false, table, row }
+        g.pending++
+        guards.current.set(k, g)
+        touchedAt.current.set(k, Date.now())
+        keys.push(k)
+      }
+      let error: unknown
+      try {
+        ;({ error } = await remote())
+      } catch (e) {
+        error = e
+      }
+      keys.forEach(releaseGuard)
       if (error) {
         console.error(error)
         toast(message)
@@ -422,7 +636,7 @@ export function PlannerProvider({
       }
       return true
     },
-    [reload],
+    [reload, releaseGuard],
   )
 
   const members = useMemo<Member[]>(() => {
@@ -458,8 +672,11 @@ export function PlannerProvider({
     isOwner: role === 'owner' && viewer.kind === 'user',
     members,
     apply,
+    setPlanner,
     mutate,
     reload,
+    refresh,
+    refreshTask,
     presence,
     setPresence,
     broadcast,

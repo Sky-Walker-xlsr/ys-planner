@@ -23,6 +23,12 @@ export function Modal({
   bodyClassName?: string
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  // onClose ist meist bei jedem Rendern eine neue Funktion. Hinge der Effekt davon ab, würde er bei
+  // jedem Neu-Rendern (z. B. durch das Aktualisieren der Daten) den Fokus aus dem Eingabefeld holen.
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
 
   useEffect(() => {
     if (!open) return
@@ -30,7 +36,7 @@ export function Modal({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation()
-        onClose()
+        onCloseRef.current()
       }
     }
     document.addEventListener('keydown', onKey)
@@ -39,7 +45,7 @@ export function Modal({
       document.removeEventListener('keydown', onKey)
       prev?.focus?.()
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open || typeof document === 'undefined') return null
   return createPortal(

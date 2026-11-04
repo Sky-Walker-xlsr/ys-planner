@@ -23,7 +23,7 @@ import { MoveTaskDialog } from './move-task-dialog'
 import { useActions } from './use-actions'
 
 export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onClose: () => void; onOpenFile: (id: string) => void }) {
-  const { state, canEdit, viewer, apply, setPresence, presence } = usePlanner()
+  const { state, canEdit, viewer, apply, setPresence, presence, refreshTask } = usePlanner()
   const index = useTaskIndex()
   const t = index.get(taskId)!
   const task = t.task
@@ -38,6 +38,18 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
     setPresence({ taskId })
     return () => setPresence({ taskId: null })
   }, [taskId, setPresence])
+
+  // Beim Öffnen und bei jedem Klick in ein Feld die neusten Daten dieser Task laden
+  const lastRefresh = useRef(0)
+  const refreshNow = () => {
+    if (Date.now() - lastRefresh.current < 1000) return
+    lastRefresh.current = Date.now()
+    void refreshTask(taskId)
+  }
+  useEffect(() => {
+    lastRefresh.current = Date.now()
+    void refreshTask(taskId)
+  }, [taskId, refreshTask])
 
   function copyLink() {
     void navigator.clipboard.writeText(window.location.href).then(() => toast('Link kopiert'))
@@ -64,7 +76,7 @@ export function TaskModal({ taskId, onClose, onOpenFile }: { taskId: string; onC
 
   return (
     <Modal open onClose={onClose} maxWidth={1080} header={header} bodyClassName="">
-      <div className="flex flex-col md:flex-row">
+      <div className="flex flex-col md:flex-row" onFocusCapture={refreshNow} onPointerDownCapture={refreshNow}>
         <div className="min-w-0 flex-1 p-5">
           <div className="flex items-center gap-2">
             <TaskCheck title={task.title} done={task.status === 'done'} disabled={!canEdit} onToggle={() => void actions.updateTask(task.id, { status: toggledStatus(task.status) })} />

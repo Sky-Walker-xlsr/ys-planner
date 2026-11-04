@@ -6,7 +6,7 @@ import {
   DndContext, PointerSensor, KeyboardSensor, pointerWithin, rectIntersection, useDraggable, useDroppable, useSensor, useSensors, type CollisionDetection, type DragEndEvent,
 } from '@dnd-kit/core'
 import {
-  CheckSquare, ChevronDown, ChevronRight, Folder as FolderIcon, Inbox, ListChecks, MoreHorizontal, Plus, Search, Settings, Star,
+  ArrowLeftRight, CheckSquare, ChevronDown, ChevronRight, Folder as FolderIcon, Inbox, ListChecks, MoreHorizontal, Plus, Search, Settings, Star,
 } from 'lucide-react'
 import { useCurrentUser } from '@/components/app/current-user'
 import { Avatar, PlannerIcon } from '@/components/ui/avatar'
@@ -242,6 +242,16 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             {data.inboxCount > 0 && (
               <span className="rounded-full bg-bg px-1.5 text-xs font-medium text-text-2 border border-line">{data.inboxCount}</span>
             )}
+          </Link>
+          <Link
+            href="/direkt"
+            onClick={onNavigate}
+            className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
+              pathname === '/direkt' ? 'bg-accent-soft text-accent-soft-text font-medium' : 'hover:bg-bg'
+            }`}
+          >
+            <ArrowLeftRight size={16} className="shrink-0" />
+            <span className="flex-1">Direkt teilen</span>
           </Link>
 
           {favorites.length > 0 && (

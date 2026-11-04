@@ -1,11 +1,12 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { usePlanner } from '@/lib/store/planner-store'
+import { reloadSidebar } from '@/components/sidebar/use-sidebar-data'
 import { ColorPicker } from '@/components/ui/color-picker'
 import { Modal } from '@/components/ui/modal'
 import { toast } from '@/components/ui/toast'
 import { effectiveFolderRoles, folderOptions } from '@/lib/folders'
-import type { Folder, Role } from '@/lib/types'
+import type { Folder, Planner, Role } from '@/lib/types'
 
 const PRIORITY_WORDS = ['dringend', 'wichtig', 'mittel', 'niedrig']
 
@@ -18,7 +19,7 @@ function tagError(tag: string) {
 
 /** Planner-Einstellungen (nur Owner): Name, Farbe, Ordner und Mail-Tag für «Mail an Planner» */
 export function PlannerSettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { state, db, viewer } = usePlanner()
+  const { state, db, viewer, setPlanner, reload } = usePlanner()
   const planner = state.planner!
   const startFolder = planner.folder_id ?? ''
   const [name, setName] = useState(planner.name)
@@ -78,6 +79,10 @@ export function PlannerSettingsDialog({ open, onClose }: { open: boolean; onClos
     setBusy(false)
     if (dbError?.code === '23505') return toast('Du hast bereits einen Planner mit diesem Mail-Tag')
     if (dbError || !data) return toast('Einstellungen konnten nicht gespeichert werden')
+    // Sofort übernehmen statt auf das Realtime-Event zu warten
+    setPlanner(data as Planner)
+    if ((data as Planner).folder_id !== planner.folder_id) void reload()
+    reloadSidebar()
     toast('Gespeichert')
     onClose()
   }

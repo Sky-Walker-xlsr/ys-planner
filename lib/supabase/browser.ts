@@ -44,6 +44,8 @@ export function getBrowserClient(scope: string = 'user'): SupabaseClient {
   const client = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     accessToken,
+    // Heartbeat im Web Worker: Hintergrund-Tabs drosseln Timer, sonst bricht die Verbindung ab
+    realtime: { worker: true },
   })
 
   // Realtime braucht ein gültiges Token auch ohne laufende Requests: regelmässig erneuern

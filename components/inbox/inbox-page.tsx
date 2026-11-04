@@ -32,11 +32,9 @@ function InboxView() {
   const openId = params.get('task')
   const [moving, setMoving] = useState<Task | null>(null)
 
+  // Erledigte Tasks verschwinden aus dem Eingang
   const tasks = useMemo(
-    () =>
-      Object.values(state.data.tasks).sort(
-        (a, b) => Number(a.status === 'done') - Number(b.status === 'done') || b.created_at.localeCompare(a.created_at),
-      ),
+    () => Object.values(state.data.tasks).filter((t) => t.status !== 'done').sort((a, b) => b.created_at.localeCompare(a.created_at)),
     [state.data.tasks],
   )
   const tagsByTask = useMemo(() => {
