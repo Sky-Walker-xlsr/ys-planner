@@ -255,7 +255,10 @@ function Session({ sessionId, room, me, onLeave }: {
         const cur = incoming.current
         if (!cur || cur.id !== m.id) return
         incoming.current = null
-        const url = URL.createObjectURL(new Blob(cur.parts as BlobPart[], { type: cur.mime || 'application/octet-stream' }))
+        // Nur Rasterbilder behalten ihren Typ (für die Vorschau). Alles andere als Download-Bytes: Eine
+        // empfangene HTML- oder SVG-Datei darf nie im Ursprung des Planners ausgeführt werden.
+        const type = isImage(cur.mime) ? cur.mime : 'application/octet-stream'
+        const url = URL.createObjectURL(new Blob(cur.parts as BlobPart[], { type }))
         urls.current.push(url)
         patchItem(cur.id, { done: cur.received, url })
         setBusy((b) => b - 1)
