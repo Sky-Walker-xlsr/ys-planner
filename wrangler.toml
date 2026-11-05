@@ -32,6 +32,15 @@ name = "OAUTH_LIMITER"
 namespace_id = "1002"
 simple = { limit = 30, period = 60 }
 
+# Direkt teilen: WebSocket-Relay pro Raum (lib/direct-relay.ts, exportiert in worker.ts)
+[[durable_objects.bindings]]
+name = "DIRECT_RELAY"
+class_name = "DirectRelay"
+
+[[migrations]]
+tag = "v1-direct-relay"
+new_sqlite_classes = ["DirectRelay"]
+
 # Logs im Dashboard (u. a. abgelehnte Mails)
 [observability]
 enabled = true

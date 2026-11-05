@@ -1,7 +1,7 @@
 'use client'
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js'
-import { getBrowserClient } from '@/lib/supabase/browser'
+import { getBrowserClient, realtimeReady } from '@/lib/supabase/browser'
 import { toast } from '@/components/ui/toast'
 import type {
   Bucket, Comment, Folder, FolderMember, KbFile, Label, Planner, PlannerMember, Role,
@@ -547,7 +547,10 @@ export function PlannerProvider({
       broadcastHandlers.current.get(event)?.forEach((fn) => fn(payload as Record<string, unknown>))
     })
     let joined = false
-    channel.subscribe((status) => {
+    let closed = false
+    // Privater Channel: erst mit User-Token beitreten
+    void realtimeReady(db).then(() => {
+      if (!closed) channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         // Nach einem Verbindungsabbruch fehlen Events: einmal alles neu laden
         if (joined) void reloadRef.current()
@@ -558,9 +561,11 @@ export function PlannerProvider({
           ...presenceState.current,
         })
       }
+      })
     })
     presenceChannel.current = channel
     return () => {
+      closed = true
       presenceChannel.current = null
       void db.removeChannel(channel)
     }

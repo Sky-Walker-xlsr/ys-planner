@@ -4,6 +4,15 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 type TokenState = { token: string; expiresAt: number }
 
 const clients = new Map<string, SupabaseClient>()
+const realtimeAuth = new WeakMap<SupabaseClient, Promise<void>>()
+
+/**
+ * Wartet, bis Realtime das User-Token hat. Vorher abonnierte private Channels würden mit dem
+ * anonymen Publishable Key beitreten und abgelehnt («Unauthorized»), erst nach Retries klappt es.
+ */
+export function realtimeReady(client: SupabaseClient): Promise<void> {
+  return realtimeAuth.get(client) ?? Promise.resolve()
+}
 
 /**
  * Browser-Client. scope = 'user' oder die Share-Link-ID eines Gasts.
@@ -47,6 +56,15 @@ export function getBrowserClient(scope: string = 'user'): SupabaseClient {
     // Heartbeat im Web Worker: Hintergrund-Tabs drosseln Timer, sonst bricht die Verbindung ab
     realtime: { worker: true },
   })
+
+  realtimeAuth.set(
+    client,
+    accessToken()
+      .then((t) => client.realtime.setAuth(t))
+      .catch(() => {
+        /* Channels versuchen es selbst erneut */
+      }),
+  )
 
   // Realtime braucht ein gültiges Token auch ohne laufende Requests: regelmässig erneuern
   setInterval(async () => {

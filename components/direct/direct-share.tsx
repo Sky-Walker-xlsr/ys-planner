@@ -1,28 +1,26 @@
 'use client'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import type { RealtimeChannel } from '@supabase/supabase-js'
 import { ArrowLeftRight, Check, Copy, Download, FileIcon, Lock, Paperclip, Send, X } from 'lucide-react'
 import { useCurrentUser } from '@/components/app/current-user'
 import { Avatar } from '@/components/ui/avatar'
 import { toast } from '@/components/ui/toast'
-import { getBrowserClient } from '@/lib/supabase/browser'
 import { formatBytes } from '@/lib/image'
 import {
-  chunkSize, ICE_SERVERS, MAX_FILE_BYTES, newSessionId, orderedGuests, SESSION_ID,
-  type PresenceMeta, type Signal, type WireMessage,
+  CHUNK_BYTES, decryptFrame, deriveSharedKey, encryptFrame, exportPublicKey, FRAME_CHUNK, FRAME_JSON, generateKeys, MAX_FILE_BYTES,
+  MIN_ROOM_LENGTH, newSessionId, normalizeRoom, roomSessionId, safetyCode, SESSION_ID, type RelayMessage, type WireMessage,
 } from '@/lib/direct-share'
 
 type Phase =
   | { kind: 'idle' }
   | { kind: 'waiting' } // Host wartet auf jemanden
   | { kind: 'request'; peer: Peer } // Host: jemand möchte beitreten
-  | { kind: 'joining' } // Gast wartet auf Annahme
+  | { kind: 'joining'; peer?: Peer } // Gast wartet auf Annahme
   | { kind: 'connecting'; peer: Peer }
   | { kind: 'connected'; peer: Peer }
   | { kind: 'ended'; reason: string; peer?: Peer }
 
-type Peer = { key: string; name: string; color: string }
+type Peer = { key: string; name: string }
 
 type Item =
   | { kind: 'msg'; id: string; mine: boolean; text: string; at: string }
@@ -30,12 +28,26 @@ type Item =
 
 const hostFlag = (id: string) => `p2p-host:${id}`
 
-/** Direkt teilen: Eine Session für genau zwei Personen, Inhalte gehen per WebRTC von Browser zu Browser */
+/** Direkt teilen: Eine Session für genau zwei Personen, Inhalte gehen Ende-zu-Ende verschlüsselt über den Relay (lib/direct-relay.ts) */
 export function DirectShare() {
   const me = useCurrentUser()
   const router = useRouter()
   const pathname = usePathname()
-  const sessionId = useSearchParams().get('s')
+  const params = useSearchParams()
+  const room = params.get('raum')
+  const linkId = params.get('s')
+  const [roomId, setRoomId] = useState<{ room: string; id: string } | null>(null)
+  useEffect(() => {
+    if (!room) return
+    let alive = true
+    void roomSessionId(room).then((id) => {
+      if (alive) setRoomId({ room, id })
+    })
+    return () => {
+      alive = false
+    }
+  }, [room])
+  const sessionId = room ? (roomId?.room === room ? roomId.id : null) : linkId
   const valid = !!sessionId && SESSION_ID.test(sessionId)
 
   function start() {
@@ -53,44 +65,81 @@ export function DirectShare() {
       <header className="border-b border-line bg-surface px-5 py-4">
         <h1 className="text-lg font-semibold">Direkt teilen</h1>
         <p className="text-sm text-text-2">
-          Dateien und Nachrichten direkt zwischen zwei Browsern. Nichts wird hochgeladen oder gespeichert.
+          Dateien und Nachrichten zwischen zwei Geräten, Ende-zu-Ende verschlüsselt. Nichts wird gespeichert.
         </p>
       </header>
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col p-5">
-        {sessionId && !valid && <p className="text-sm text-danger">Dieser Link ist ungültig.</p>}
-        {!sessionId && <StartCard onStart={start} />}
-        {valid && <Session key={sessionId} sessionId={sessionId} me={me} onLeave={() => router.replace(pathname)} />}
+        {!room && linkId && !valid && <p className="text-sm text-danger">Dieser Link ist ungültig.</p>}
+        {!room && !linkId && (
+          <StartCard onStart={start} onRoom={(name) => router.replace(`${pathname}?raum=${encodeURIComponent(normalizeRoom(name))}`)} />
+        )}
+        {valid && (
+          <Session key={sessionId} sessionId={sessionId} room={room ?? undefined} me={me} onLeave={() => router.replace(pathname)} />
+        )}
       </div>
     </div>
   )
 }
 
-function StartCard({ onStart }: { onStart: () => void }) {
+function StartCard({ onStart, onRoom }: { onStart: () => void; onRoom: (name: string) => void }) {
+  const [name, setName] = useState('')
+  const ok = normalizeRoom(name).length >= MIN_ROOM_LENGTH
   return (
-    <div className="card flex flex-col items-center gap-3 p-8 text-center">
-      <ArrowLeftRight size={28} className="text-accent" />
-      <p className="max-w-md text-sm text-text-2">
-        Starte eine Session und schick den Link einer Person. Sobald du sie annimmst, könnt ihr Dateien und Nachrichten
-        austauschen, Ende-zu-Ende verschlüsselt. Wenn ihr beide auf «Fertig» klickt, wird die Session geschlossen.
+    <div className="flex flex-col gap-4">
+      <form
+        className="card flex flex-col gap-3 p-6"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (ok) onRoom(name)
+        }}
+      >
+        <div>
+          <h2 className="font-semibold">Raum per Name</h2>
+          <p className="mt-1 text-sm text-text-2">
+            Gebt beide denselben Raumnamen ein, auch auf zwei eigenen Geräten. Sobald zwei im Raum sind, verbindet ihr euch
+            automatisch. Wähle einen Namen, den niemand errät.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <input className="input flex-1" value={name} onChange={(e) => setName(e.target.value)} placeholder="z. B. blaue-giraffe-42"
+            aria-label="Raumname" maxLength={100} autoComplete="off" />
+          <button type="submit" className="btn-primary" disabled={!ok}>Raum betreten</button>
+        </div>
+        {name && !ok && <p className="text-xs text-text-2">Mindestens {MIN_ROOM_LENGTH} Zeichen.</p>}
+      </form>
+      <div className="card flex flex-col items-center gap-3 p-6 text-center">
+        <ArrowLeftRight size={28} className="text-accent" />
+        <p className="max-w-md text-sm text-text-2">
+          Oder starte eine Session per Link: Du schickst den Link einer Person und nimmst sie an, sobald sie beitritt.
+        </p>
+        <button type="button" className="btn-secondary" onClick={onStart}>Session per Link starten</button>
+      </div>
+      <p className="text-center text-xs text-text-2">
+        Dateien und Nachrichten werden im Browser verschlüsselt, der Server leitet sie nur weiter und speichert nichts. Wenn ihr beide auf «Fertig»
+        klickt, wird die Session geschlossen.
       </p>
-      <button type="button" className="btn-primary" onClick={onStart}>Session starten</button>
     </div>
   )
 }
 
-function Session({ sessionId, me, onLeave }: { sessionId: string; me: { id: string; display_name: string; avatar_color: string }; onLeave: () => void }) {
-  const db = getBrowserClient()
-  const isHost = useMemo(() => {
+function Session({ sessionId, room, me, onLeave }: {
+  sessionId: string
+  /** Raum per Name: kein Annehmen, die zwei im Raum verbinden sich automatisch */
+  room?: string
+  me: { id: string; display_name: string; avatar_color: string }
+  onLeave: () => void
+}) {
+  void me
+  const linkHost = useMemo(() => {
+    if (room) return false
     try {
       return sessionStorage.getItem(hostFlag(sessionId)) === '1'
     } catch {
       return false
     }
-  }, [sessionId])
-  // Eigener Schlüssel pro Tab: So kannst du auch Dateien zwischen zwei eigenen Geräten schicken
-  const myKey = useMemo(() => `${me.id}:${crypto.randomUUID().slice(0, 8)}`, [me.id])
+  }, [sessionId, room])
 
-  const [phase, setPhaseState] = useState<Phase>({ kind: isHost ? 'waiting' : 'joining' })
+  const [phase, setPhaseState] = useState<Phase>({ kind: room || linkHost ? 'waiting' : 'joining' })
   const phaseRef = useRef(phase)
   const setPhase = useCallback((p: Phase) => {
     phaseRef.current = p
@@ -101,232 +150,227 @@ function Session({ sessionId, me, onLeave }: { sessionId: string; me: { id: stri
   const [myDone, setMyDone] = useState(false)
   const [peerDone, setPeerDone] = useState(false)
   const [busy, setBusy] = useState(0) // laufende Übertragungen (senden + empfangen)
+  const [code, setCode] = useState<string | null>(null)
   const doneRef = useRef({ me: false, peer: false })
   useEffect(() => {
     doneRef.current = { me: myDone, peer: peerDone }
   }, [myDone, peerDone])
 
-  const channel = useRef<RealtimeChannel | null>(null)
-  const pc = useRef<RTCPeerConnection | null>(null)
-  const dc = useRef<RTCDataChannel | null>(null)
-  const pendingIce = useRef<RTCIceCandidateInit[]>([])
+  const ws = useRef<WebSocket | null>(null)
+  const keys = useRef<Promise<{ pair: CryptoKeyPair; pub: string }> | null>(null)
+  const shared = useRef<CryptoKey | null>(null)
+  const sentKey = useRef(false)
   const urls = useRef<string[]>([])
-  const incoming = useRef<{ id: string; size: number; mime: string; parts: ArrayBuffer[]; received: number; lastUi: number } | null>(null)
-  const sendQueue = useRef<Promise<void>>(Promise.resolve())
-
-  const signal = useCallback((s: Signal) => {
-    void channel.current?.send({ type: 'broadcast', event: 'signal', payload: s })
-  }, [])
-
-  const leaveChannel = useCallback(() => {
-    if (channel.current) void db.removeChannel(channel.current)
-    channel.current = null
-  }, [db])
+  const incoming = useRef<{ id: string; size: number; mime: string; parts: Uint8Array[]; received: number; lastUi: number } | null>(null)
+  // Reihenfolge sichern: Verschlüsseln und Entschlüsseln sind asynchron
+  const sendChain = useRef<Promise<void>>(Promise.resolve())
+  const recvChain = useRef<Promise<void>>(Promise.resolve())
+  const fileQueue = useRef<Promise<void>>(Promise.resolve())
 
   const end = useCallback(
     (reason: string) => {
       if (phaseRef.current.kind === 'ended') return
       const peer = 'peer' in phaseRef.current ? phaseRef.current.peer : undefined
       setPhase({ kind: 'ended', reason, peer })
-      dc.current?.close()
-      pc.current?.close()
-      dc.current = null
-      pc.current = null
-      leaveChannel()
+      shared.current = null
+      try {
+        ws.current?.close(1000)
+      } catch {
+        /* egal */
+      }
+      ws.current = null
       try {
         sessionStorage.removeItem(hostFlag(sessionId))
       } catch {
         /* egal */
       }
     },
-    [leaveChannel, sessionId, setPhase],
+    [sessionId, setPhase],
   )
 
   const patchItem = useCallback((id: string, patch: Partial<Item>) => {
     setItems((list) => list.map((i) => (i.id === id ? ({ ...i, ...patch } as Item) : i)))
   }, [])
 
-  // ---------------------------------------------------------------- DataChannel
-  const setupChannel = useCallback(
-    (ch: RTCDataChannel, peer: Peer) => {
-      dc.current = ch
-      ch.binaryType = 'arraybuffer'
-      ch.bufferedAmountLowThreshold = 1024 * 1024
-      ch.onopen = () => {
-        setPhase({ kind: 'connected', peer })
-        // Verbunden: Die Signalisierung wird nicht mehr gebraucht, niemand sonst kann beitreten
-        leaveChannel()
-      }
-      ch.onclose = () =>
-        end(doneRef.current.me && doneRef.current.peer ? 'Ihr seid beide fertig. Die Session ist geschlossen.' : 'Die Verbindung wurde getrennt.')
-      ch.onmessage = (e) => {
-        if (typeof e.data !== 'string') {
-          const cur = incoming.current
-          if (!cur) return
-          const buf = e.data as ArrayBuffer
-          cur.parts.push(buf)
-          cur.received += buf.byteLength
-          if (Date.now() - cur.lastUi > 150) {
-            cur.lastUi = Date.now()
-            patchItem(cur.id, { done: cur.received })
-          }
-          return
-        }
-        let m: WireMessage
-        try {
-          m = JSON.parse(e.data) as WireMessage
-        } catch {
-          return
-        }
-        if (m.t === 'msg') {
-          setItems((l) => [...l, { kind: 'msg', id: m.id, mine: false, text: String(m.text).slice(0, 10_000), at: m.at }])
-        } else if (m.t === 'file') {
-          if (m.size > MAX_FILE_BYTES) return
-          incoming.current = { id: m.id, size: m.size, mime: m.mime, parts: [], received: 0, lastUi: 0 }
-          setBusy((b) => b + 1)
-          setItems((l) => [...l, { kind: 'file', id: m.id, mine: false, name: String(m.name).slice(0, 255), size: m.size, mime: m.mime, at: m.at, done: 0 }])
-        } else if (m.t === 'end') {
-          const cur = incoming.current
-          if (!cur || cur.id !== m.id) return
-          incoming.current = null
-          const url = URL.createObjectURL(new Blob(cur.parts, { type: cur.mime || 'application/octet-stream' }))
-          urls.current.push(url)
-          patchItem(cur.id, { done: cur.received, url })
-          setBusy((b) => b - 1)
-        } else if (m.t === 'done') {
-          setPeerDone(!!m.value)
-        }
-      }
-    },
-    [end, leaveChannel, patchItem, setPhase],
-  )
+  const sendPlain = useCallback((m: RelayMessage) => {
+    if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify(m))
+  }, [])
 
-  const createPeer = useCallback(
-    (peer: Peer) => {
-      const conn = new RTCPeerConnection({ iceServers: ICE_SERVERS })
-      pc.current = conn
-      conn.onicecandidate = (e) => {
-        if (e.candidate) signal({ kind: 'ice', from: myKey, to: peer.key, candidate: e.candidate.toJSON() })
+  /** Verschlüsselt senden, in Reihenfolge. Resolved, sobald der Frame im Sendepuffer liegt. */
+  const sendFrame = useCallback((kind: number, data: Uint8Array) => {
+    const next = sendChain.current.then(async () => {
+      const sock = ws.current
+      const key = shared.current
+      if (!sock || !key || sock.readyState !== WebSocket.OPEN) throw new Error('closed')
+      const frame = await encryptFrame(key, kind, data)
+      // Backpressure: nicht mehr als ein paar MB im Puffer
+      while (sock.bufferedAmount > 8 * 1024 * 1024) {
+        if (sock.readyState !== WebSocket.OPEN) throw new Error('closed')
+        await new Promise((r) => setTimeout(r, 20))
       }
-      conn.onconnectionstatechange = () => {
-        if (conn.connectionState === 'failed') {
-          end('Es konnte keine direkte Verbindung aufgebaut werden. Vermutlich blockiert ein Netzwerk direkte Verbindungen.')
-        }
-      }
-      return conn
-    },
-    [end, myKey, signal],
-  )
-
-  // ---------------------------------------------------------------- Signalisierung
-  useEffect(() => {
-    const ch = db.channel(`p2p:${sessionId}`, { config: { private: true, presence: { key: myKey } } })
-    channel.current = ch
-    const joinedAt = Date.now()
-    let hostSeen = false
-
-    const peers = () => {
-      const state = ch.presenceState<PresenceMeta>()
-      return Object.entries(state)
-        .filter(([key]) => key !== myKey)
-        .map(([key, metas]) => ({ key, meta: metas[metas.length - 1] }))
-        .filter((e) => e.meta)
-    }
-    const toPeer = (e: { key: string; meta: PresenceMeta }): Peer => ({ key: e.key, name: e.meta.name, color: e.meta.color })
-
-    ch.on('presence', { event: 'sync' }, () => {
-      const list = peers()
-      const p = phaseRef.current
-      if (isHost) {
-        const first = orderedGuests(list)[0]
-        if (p.kind === 'waiting' && first) setPhase({ kind: 'request', peer: toPeer(first) })
-        else if (p.kind === 'request' && !list.some((e) => e.key === p.peer.key)) setPhase({ kind: 'waiting' })
-        return
-      }
-      const host = list.find((e) => e.meta.role === 'host')
-      if (host) hostSeen = true
-      if (p.kind !== 'joining') return
-      if (!host) {
-        if (hostSeen) end('Die Session ist nicht mehr verfügbar.')
-        return
-      }
-      // Ist schon jemand vor mir da, ist die Session besetzt
-      const mine = { key: myKey, meta: { name: '', color: '', role: 'guest' as const, joinedAt } }
-      if (orderedGuests([...list, mine])[0].key !== myKey) end('Die Session ist bereits besetzt. Sie ist nur für zwei Personen.')
+      sock.send(frame)
     })
+    sendChain.current = next.catch(() => {})
+    return next
+  }, [])
 
-    ch.on('broadcast', { event: 'signal' }, async ({ payload }) => {
-      const s = payload as Signal
-      if (s.to !== myKey) return
-      const p = phaseRef.current
+  const sendMessage = useCallback(
+    (m: WireMessage) => sendFrame(FRAME_JSON, new TextEncoder().encode(JSON.stringify(m))),
+    [sendFrame],
+  )
+
+  const sendMyKey = useCallback(() => {
+    if (sentKey.current || !keys.current) return
+    sentKey.current = true
+    void keys.current.then(({ pub }) => sendPlain({ type: 'key', key: pub }))
+  }, [sendPlain])
+
+  const onFrame = useCallback(
+    (kind: number, data: Uint8Array) => {
+      if (kind === FRAME_CHUNK) {
+        const cur = incoming.current
+        if (!cur) return
+        cur.parts.push(data.slice())
+        cur.received += data.byteLength
+        if (Date.now() - cur.lastUi > 150) {
+          cur.lastUi = Date.now()
+          patchItem(cur.id, { done: cur.received })
+        }
+        return
+      }
+      let m: WireMessage
       try {
-        if (s.kind === 'reject') return end('Die Anfrage wurde abgelehnt.')
-        if (s.kind === 'bye') return end('Die andere Person hat die Session beendet.')
-        if (s.kind === 'accept' && !isHost && p.kind === 'joining') {
-          const host = peers().find((e) => e.key === s.from)
-          const peer: Peer = host ? toPeer(host) : { key: s.from, name: 'Gegenüber', color: '#5F6670' }
+        m = JSON.parse(new TextDecoder().decode(data)) as WireMessage
+      } catch {
+        return
+      }
+      if (m.t === 'msg') {
+        setItems((l) => [...l, { kind: 'msg', id: m.id, mine: false, text: String(m.text).slice(0, 10_000), at: m.at }])
+      } else if (m.t === 'file') {
+        if (m.size > MAX_FILE_BYTES) return
+        incoming.current = { id: m.id, size: m.size, mime: m.mime, parts: [], received: 0, lastUi: 0 }
+        setBusy((b) => b + 1)
+        setItems((l) => [...l, { kind: 'file', id: m.id, mine: false, name: String(m.name).slice(0, 255), size: m.size, mime: m.mime, at: m.at, done: 0 }])
+      } else if (m.t === 'end') {
+        const cur = incoming.current
+        if (!cur || cur.id !== m.id) return
+        incoming.current = null
+        const url = URL.createObjectURL(new Blob(cur.parts as BlobPart[], { type: cur.mime || 'application/octet-stream' }))
+        urls.current.push(url)
+        patchItem(cur.id, { done: cur.received, url })
+        setBusy((b) => b - 1)
+      } else if (m.t === 'done') {
+        setPeerDone(!!m.value)
+      }
+    },
+    [patchItem],
+  )
+
+  // ---------------------------------------------------------------- Verbindung zum Relay
+  useEffect(() => {
+    let closed = false
+    let alone: ReturnType<typeof setTimeout> | null = null
+    keys.current = generateKeys().then(async (pair) => ({ pair, pub: await exportPublicKey(pair) }))
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    const sock = new WebSocket(`${proto}://${location.host}/api/direkt/ws?id=${sessionId}`)
+    sock.binaryType = 'arraybuffer'
+    ws.current = sock
+    // Keepalive: Ohne Verkehr trennt Cloudflare die Verbindung; der Relay antwortet automatisch
+    const ping = setInterval(() => {
+      if (sock.readyState === WebSocket.OPEN) sock.send('ping')
+    }, 20_000)
+
+    sock.onmessage = (ev) => {
+      if (typeof ev.data !== 'string') {
+        const frame = ev.data as ArrayBuffer
+        recvChain.current = recvChain.current.then(async () => {
+          const key = shared.current
+          if (!key) return
+          try {
+            const { kind, data } = await decryptFrame(key, frame)
+            onFrame(kind, data)
+          } catch {
+            /* manipuliert oder falscher Schlüssel: verwerfen */
+          }
+        })
+        return
+      }
+      if (ev.data === 'pong') return
+      let m: RelayMessage
+      try {
+        m = JSON.parse(ev.data) as RelayMessage
+      } catch {
+        return
+      }
+      const p = phaseRef.current
+      if (m.type === 'waiting') {
+        // Link-Gast allein im Raum: Der Gastgeber ist nicht (mehr) da
+        if (!room && !linkHost) {
+          alone = setTimeout(() => end('Die Session ist nicht mehr verfügbar. Bitte um einen neuen Link.'), 4000)
+        }
+      } else if (m.type === 'peer') {
+        if (alone) clearTimeout(alone)
+        const peer: Peer = { key: m.uid, name: m.name }
+        if (room) {
           setPhase({ kind: 'connecting', peer })
-          const conn = createPeer(peer)
-          conn.ondatachannel = (e) => setupChannel(e.channel, peer)
-          return
+          sendMyKey()
+        } else if (linkHost) {
+          setPhase({ kind: 'request', peer })
+        } else {
+          setPhase({ kind: 'joining', peer })
         }
-        const conn = pc.current
-        if (!conn || !('peer' in p) || p.peer?.key !== s.from) return
-        if (s.kind === 'offer' && !isHost) {
-          await conn.setRemoteDescription(s.sdp)
-          for (const c of pendingIce.current.splice(0)) await conn.addIceCandidate(c)
-          const answer = await conn.createAnswer()
-          await conn.setLocalDescription(answer)
-          signal({ kind: 'answer', from: myKey, to: s.from, sdp: answer })
-        } else if (s.kind === 'answer' && isHost) {
-          await conn.setRemoteDescription(s.sdp)
-          for (const c of pendingIce.current.splice(0)) await conn.addIceCandidate(c)
-        } else if (s.kind === 'ice') {
-          if (conn.remoteDescription) await conn.addIceCandidate(s.candidate)
-          else pendingIce.current.push(s.candidate)
+      } else if (m.type === 'accept') {
+        if (p.kind === 'joining' && p.peer) {
+          setPhase({ kind: 'connecting', peer: p.peer })
+          sendMyKey()
         }
-      } catch (e) {
-        console.error(e)
-        end('Die Verbindung konnte nicht aufgebaut werden.')
+      } else if (m.type === 'reject') {
+        end('Die Anfrage wurde abgelehnt.')
+      } else if (m.type === 'key') {
+        if (!keys.current || !('peer' in p) || !p.peer) return
+        const peer = p.peer
+        const theirs = m.key
+        void keys.current.then(async ({ pair, pub }) => {
+          shared.current = await deriveSharedKey(pair, theirs)
+          sendMyKey()
+          setCode(await safetyCode(pub, theirs))
+          if (phaseRef.current.kind !== 'ended') setPhase({ kind: 'connected', peer })
+        })
+      } else if (m.type === 'peer-left') {
+        if (p.kind === 'request') return setPhase({ kind: 'waiting' })
+        if (p.kind === 'waiting') return
+        end(doneRef.current.me && doneRef.current.peer
+          ? 'Ihr seid beide fertig. Die Session ist geschlossen.'
+          : 'Die andere Person hat die Session verlassen.')
       }
-    })
+    }
 
-    ch.subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        void ch.track({ name: me.display_name, color: me.avatar_color, role: isHost ? 'host' : 'guest', joinedAt } satisfies PresenceMeta)
-      } else if (status === 'CHANNEL_ERROR' && phaseRef.current.kind !== 'connected') {
-        end('Die Session konnte nicht geöffnet werden.')
+    sock.onclose = (ev) => {
+      if (closed) return
+      if (ev.code === 4002) {
+        return end(room ? 'In diesem Raum sind schon zwei. Wähle einen anderen Namen.' : 'Die Session ist bereits besetzt. Sie ist nur für zwei Personen.')
       }
-    })
-
-    // Gast: Ist nach einigen Sekunden kein Host da, gibt es die Session nicht (mehr)
-    const timeout = isHost
-      ? null
-      : setTimeout(() => {
-          if (phaseRef.current.kind === 'joining' && !hostSeen) end('Die Session ist nicht mehr verfügbar. Bitte um einen neuen Link.')
-        }, 6000)
+      end(doneRef.current.me && doneRef.current.peer ? 'Ihr seid beide fertig. Die Session ist geschlossen.' : 'Die Verbindung wurde getrennt.')
+    }
+    sock.onerror = () => console.warn('[direkt] WebSocket-Fehler')
 
     return () => {
-      if (timeout) clearTimeout(timeout)
-      if (channel.current === ch) leaveChannel()
+      closed = true
+      clearInterval(ping)
+      if (alone) clearTimeout(alone)
+      try {
+        sock.close(1000)
+      } catch {
+        /* egal */
+      }
+      if (ws.current === sock) ws.current = null
     }
-  }, [db, sessionId, myKey, isHost, me.display_name, me.avatar_color, createPeer, setupChannel, signal, end, leaveChannel, setPhase])
-
-  // Verbindungsaufbau hängt (z. B. Gegenüber hat den Tab geschlossen)
-  useEffect(() => {
-    if (phase.kind !== 'connecting') return
-    const t = setTimeout(() => end('Die Verbindung konnte nicht aufgebaut werden.'), 25_000)
-    return () => clearTimeout(t)
-  }, [phase.kind, end])
+  }, [sessionId, room, linkHost, end, setPhase, sendMyKey, onFrame])
 
   // Aufräumen beim Verlassen der Seite
   useEffect(() => {
     const list = urls.current
-    return () => {
-      dc.current?.close()
-      pc.current?.close()
-      list.forEach((u) => URL.revokeObjectURL(u))
-    }
+    return () => list.forEach((u) => URL.revokeObjectURL(u))
   }, [])
 
   // Warnen, solange die Session läuft oder empfangene Dateien noch nicht gespeichert sind
@@ -348,53 +392,28 @@ function Session({ sessionId, me, onLeave }: { sessionId: string; me: { id: stri
   }, [myDone, peerDone, busy, phase.kind, end])
 
   // ---------------------------------------------------------------- Aktionen
-  async function accept(peer: Peer) {
+  function accept(peer: Peer) {
     setPhase({ kind: 'connecting', peer })
-    signal({ kind: 'accept', from: myKey, to: peer.key })
-    const conn = createPeer(peer)
-    setupChannel(conn.createDataChannel('share', { ordered: true }), peer)
-    const offer = await conn.createOffer()
-    await conn.setLocalDescription(offer)
-    signal({ kind: 'offer', from: myKey, to: peer.key, sdp: offer })
+    sendPlain({ type: 'accept' })
+    sendMyKey()
   }
 
-  function reject(peer: Peer) {
-    signal({ kind: 'reject', from: myKey, to: peer.key })
+  function reject() {
+    sendPlain({ type: 'reject' })
     setPhase({ kind: 'waiting' })
   }
 
   function leave() {
-    const p = phaseRef.current
-    if ('peer' in p && p.peer && channel.current) signal({ kind: 'bye', from: myKey, to: p.peer.key })
     end('Du hast die Session beendet.')
     onLeave()
   }
 
-  function send(m: WireMessage) {
-    const ch = dc.current
-    if (!ch || ch.readyState !== 'open') return false
-    ch.send(JSON.stringify(m))
-    return true
-  }
-
   function sendText(text: string) {
+    if (!shared.current) return false
     const m: WireMessage = { t: 'msg', id: crypto.randomUUID(), text, at: new Date().toISOString() }
-    if (!send(m)) return false
+    sendMessage(m).catch(() => toast('Nachricht konnte nicht gesendet werden'))
     setItems((l) => [...l, { kind: 'msg', id: m.id, mine: true, text, at: m.at }])
     return true
-  }
-
-  async function waitForBuffer(ch: RTCDataChannel) {
-    if (ch.bufferedAmount <= 4 * 1024 * 1024) return
-    await new Promise<void>((resolve) => {
-      const done = () => {
-        ch.removeEventListener('bufferedamountlow', done)
-        ch.removeEventListener('close', done)
-        resolve()
-      }
-      ch.addEventListener('bufferedamountlow', done)
-      ch.addEventListener('close', done)
-    })
   }
 
   function sendFiles(files: File[]) {
@@ -405,26 +424,23 @@ function Session({ sessionId, me, onLeave }: { sessionId: string; me: { id: stri
       }
       const id = crypto.randomUUID()
       const at = new Date().toISOString()
-      setItems((l) => [...l, { kind: 'file', id, mine: true, name: file.name, size: file.size, mime: file.type, at, done: 0 }])
+      const preview = isImage(file.type) ? URL.createObjectURL(file) : undefined
+      if (preview) urls.current.push(preview)
+      setItems((l) => [...l, { kind: 'file', id, mine: true, name: file.name, size: file.size, mime: file.type, at, done: 0, url: preview }])
       setBusy((b) => b + 1)
-      // Nacheinander senden: Die Chunks einer Datei dürfen sich nicht mit einer anderen mischen
-      sendQueue.current = sendQueue.current.then(async () => {
-        const ch = dc.current
+      // Dateien strikt nacheinander: Die Chunks einer Datei dürfen sich nicht mit einer anderen mischen
+      fileQueue.current = fileQueue.current.then(async () => {
         try {
-          if (!ch || ch.readyState !== 'open') throw new Error('closed')
-          ch.send(JSON.stringify({ t: 'file', id, name: file.name, size: file.size, mime: file.type, at } satisfies WireMessage))
-          const size = chunkSize(pc.current?.sctp?.maxMessageSize)
+          await sendMessage({ t: 'file', id, name: file.name, size: file.size, mime: file.type, at })
           let lastUi = 0
-          for (let off = 0; off < file.size; off += size) {
-            await waitForBuffer(ch)
-            if (ch.readyState !== 'open') throw new Error('closed')
-            ch.send(await file.slice(off, off + size).arrayBuffer())
+          for (let off = 0; off < file.size; off += CHUNK_BYTES) {
+            await sendFrame(FRAME_CHUNK, new Uint8Array(await file.slice(off, off + CHUNK_BYTES).arrayBuffer()))
             if (Date.now() - lastUi > 150) {
               lastUi = Date.now()
-              patchItem(id, { done: Math.min(file.size, off + size) })
+              patchItem(id, { done: Math.min(file.size, off + CHUNK_BYTES) })
             }
           }
-          ch.send(JSON.stringify({ t: 'end', id } satisfies WireMessage))
+          await sendMessage({ t: 'end', id })
           patchItem(id, { done: file.size })
         } catch {
           toast(`${file.name} konnte nicht gesendet werden`)
@@ -437,11 +453,26 @@ function Session({ sessionId, me, onLeave }: { sessionId: string; me: { id: stri
 
   function toggleDone() {
     const next = !myDone
-    if (send({ t: 'done', value: next })) setMyDone(next)
+    setMyDone(next)
+    sendMessage({ t: 'done', value: next }).catch(() => setMyDone(!next))
   }
 
   // ---------------------------------------------------------------- Ansicht
   const link = typeof window !== 'undefined' ? `${window.location.origin}/direkt?s=${sessionId}` : ''
+
+  if (room && (phase.kind === 'waiting' || phase.kind === 'joining')) {
+    return (
+      <div className="card flex flex-col gap-3 p-6">
+        <h2 className="font-semibold">Raum «{room}»</h2>
+        <p className="text-sm text-text-2">
+          {phase.kind === 'waiting'
+            ? 'Warte auf jemanden, der denselben Raumnamen eingibt. Das kannst auch du auf einem anderen Gerät sein.'
+            : 'Gegenüber gefunden, Verbindung wird aufgebaut …'}
+        </p>
+        <div><button type="button" className="btn-text" onClick={leave}>Raum verlassen</button></div>
+      </div>
+    )
+  }
 
   if (phase.kind === 'waiting' || phase.kind === 'request') {
     return (
@@ -458,10 +489,10 @@ function Session({ sessionId, me, onLeave }: { sessionId: string; me: { id: stri
         </div>
         {phase.kind === 'request' ? (
           <div className="flex flex-wrap items-center gap-3 rounded-card border border-accent bg-accent-soft p-3" role="alert">
-            <Avatar name={phase.peer.name} color={phase.peer.color} size={28} />
+            <Avatar name={phase.peer.name} size={28} />
             <span className="flex-1 text-sm"><strong>{phase.peer.name}</strong> möchte beitreten.</span>
-            <button type="button" className="btn-secondary" onClick={() => reject(phase.peer)}>Ablehnen</button>
-            <button type="button" className="btn-primary" onClick={() => void accept(phase.peer)}>Annehmen</button>
+            <button type="button" className="btn-secondary" onClick={reject}>Ablehnen</button>
+            <button type="button" className="btn-primary" onClick={() => accept(phase.peer)}>Annehmen</button>
           </div>
         ) : (
           <p className="text-sm text-text-2">Warte auf die andere Person …</p>
@@ -476,7 +507,7 @@ function Session({ sessionId, me, onLeave }: { sessionId: string; me: { id: stri
       <div className="card flex flex-col gap-3 p-6">
         <h2 className="font-semibold">{phase.kind === 'joining' ? 'Warte auf Annahme …' : 'Verbindung wird aufgebaut …'}</h2>
         <p className="text-sm text-text-2">
-          {phase.kind === 'joining' ? 'Die Person, die dir den Link geschickt hat, muss dich annehmen.' : `Direkte Verbindung zu ${phase.peer.name}.`}
+          {phase.kind === 'joining' ? 'Die Person, die dir den Link geschickt hat, muss dich annehmen.' : `Verschlüsselte Verbindung zu ${phase.peer.name}.`}
         </p>
         <div><button type="button" className="btn-text" onClick={leave}>Abbrechen</button></div>
       </div>
@@ -498,12 +529,13 @@ function Session({ sessionId, me, onLeave }: { sessionId: string; me: { id: stri
   return (
     <div className="card flex min-h-[420px] flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-3">
-        {peer && <Avatar name={peer.name} color={peer.color} size={28} />}
+        {peer && <Avatar name={peer.name} size={28} />}
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{peer?.name ?? 'Session'}</div>
           <div className="flex items-center gap-1 text-xs text-text-2">
             <Lock size={11} />
-            {ended ? 'Session geschlossen' : 'Direkt verbunden, Ende-zu-Ende verschlüsselt'}
+            {ended ? 'Session geschlossen' : 'Verbunden, Ende-zu-Ende verschlüsselt'}
+            {!ended && code && <span title="Steht bei beiden derselbe Code, liest niemand mit"> · Prüfcode {code}</span>}
             {!ended && peerDone && ' · ist fertig'}
           </div>
         </div>
@@ -528,7 +560,11 @@ function Session({ sessionId, me, onLeave }: { sessionId: string; me: { id: stri
           <button type="button" className="btn-secondary" onClick={onLeave}>Neue Session</button>
         </div>
       ) : (
-        <Composer onText={sendText} onFiles={sendFiles} />
+        <Composer onSend={(text, files) => {
+          if (text && !sendText(text)) return false
+          if (files.length) sendFiles(files)
+          return true
+        }} />
       )}
     </div>
   )
@@ -541,7 +577,7 @@ function Timeline({ items }: { items: Item[] }) {
   }, [items.length])
   return (
     <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-4" aria-live="polite">
-      {items.length === 0 && <p className="m-auto text-sm text-text-2">Noch nichts ausgetauscht. Zieh Dateien hierher oder schreib eine Nachricht.</p>}
+      {items.length === 0 && <p className="m-auto text-sm text-text-2">Noch nichts ausgetauscht. Schreib eine Nachricht, füge ein Bild mit Ctrl+V ein oder zieh Dateien hierher.</p>}
       {items.map((i) => (
         <div key={i.id} className={`flex ${i.mine ? 'justify-end' : 'justify-start'}`}>
           {i.kind === 'msg' ? (
@@ -556,42 +592,102 @@ function Timeline({ items }: { items: Item[] }) {
   )
 }
 
+const isImage = (mime: string) => /^image\/(png|jpe?g|gif|webp|avif|bmp)$/i.test(mime)
+
 function FileBubble({ item }: { item: Extract<Item, { kind: 'file' }> }) {
   const pct = item.size ? Math.round((item.done / item.size) * 100) : 100
   const complete = item.mine ? item.done >= item.size : !!item.url
+  const image = isImage(item.mime) && item.url
   return (
-    <div className="flex w-72 max-w-full items-center gap-3 rounded-card border border-line bg-surface p-3">
-      <FileIcon size={20} className="shrink-0 text-text-2" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium" title={item.name}>{item.name}</div>
-        <div className="text-xs text-text-2">
-          {formatBytes(item.size)} · {complete ? (item.mine ? 'gesendet' : 'empfangen') : `${pct} %`}
-        </div>
-        {!complete && (
-          <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg">
-            <div className="h-full bg-accent transition-[width]" style={{ width: `${pct}%` }} />
-          </div>
-        )}
-      </div>
-      {item.url && (
-        <a href={item.url} download={item.name} className="btn-icon" aria-label={`${item.name} herunterladen`} title="Herunterladen">
-          <Download size={16} />
+    <div className="flex w-72 max-w-full flex-col overflow-hidden rounded-card border border-line bg-surface">
+      {image && (
+        <a href={item.url} download={item.name} title={`${item.name} herunterladen`}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- lokale Blob-URL */}
+          <img src={item.url} alt={item.name} className="max-h-72 w-full bg-bg object-contain" />
         </a>
       )}
+      <div className="flex items-center gap-3 p-3">
+        <FileIcon size={20} className="shrink-0 text-text-2" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium" title={item.name}>{item.name}</div>
+          <div className="text-xs text-text-2">
+            {formatBytes(item.size)} · {complete ? (item.mine ? 'gesendet' : 'empfangen') : `${pct} %`}
+          </div>
+          {!complete && (
+            <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg">
+              <div className="h-full bg-accent transition-[width]" style={{ width: `${pct}%` }} />
+            </div>
+          )}
+        </div>
+        {item.url && (!item.mine || complete) && (
+          <a href={item.url} download={item.name} className="btn-icon" aria-label={`${item.name} herunterladen`} title="Herunterladen">
+            <Download size={16} />
+          </a>
+        )}
+      </div>
     </div>
   )
 }
 
-function Composer({ onText, onFiles }: { onText: (text: string) => boolean; onFiles: (files: File[]) => void }) {
+/** Bilder aus der Zwischenablage heissen meist «image.png»: Zeitstempel als Namen geben */
+function namePasted(file: File) {
+  if (file.name && file.name !== 'image.png' && file.name !== 'image.jpg') return file
+  const ext = file.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png'
+  const t = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const name = `Bild ${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}.${pad(t.getMinutes())}.${pad(t.getSeconds())}.${ext}`
+  return new File([file], name, { type: file.type })
+}
+
+type Attachment = { id: string; file: File; preview?: string }
+
+/** Eingabe: Text plus Anhänge (Einfügen mit Ctrl+V, Büroklammer, Ziehen). Gesendet wird alles zusammen. */
+function Composer({ onSend }: { onSend: (text: string, files: File[]) => boolean }) {
   const [text, setText] = useState('')
   const [over, setOver] = useState(false)
+  const [attachments, setAttachments] = useState<Attachment[]>([])
   const input = useRef<HTMLInputElement>(null)
+  const textarea = useRef<HTMLTextAreaElement>(null)
+  const previews = useRef<string[]>([])
+
+  const add = useCallback((files: File[]) => {
+    if (!files.length) return
+    const next = files.map((file) => {
+      const preview = isImage(file.type) ? URL.createObjectURL(file) : undefined
+      if (preview) previews.current.push(preview)
+      return { id: crypto.randomUUID(), file, preview }
+    })
+    setAttachments((a) => [...a, ...next])
+    textarea.current?.focus()
+  }, [])
+
+  // Einfügen überall auf der Seite: Bilder und Dateien aus der Zwischenablage werden Anhänge
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const files = [...(e.clipboardData?.files ?? [])]
+      if (!files.length) return
+      e.preventDefault()
+      add(files.map(namePasted))
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [add])
+
+  useEffect(() => {
+    const list = previews.current
+    return () => list.forEach((u) => URL.revokeObjectURL(u))
+  }, [])
 
   function submit(e: React.FormEvent) {
     e.preventDefault()
     const v = text.trim()
-    if (v && onText(v)) setText('')
+    if (!v && !attachments.length) return
+    if (!onSend(v, attachments.map((a) => a.file))) return
+    setText('')
+    setAttachments([])
   }
+
+  const canSend = !!text.trim() || attachments.length > 0
 
   return (
     <form
@@ -602,32 +698,57 @@ function Composer({ onText, onFiles }: { onText: (text: string) => boolean; onFi
         if (!e.dataTransfer.files.length) return
         e.preventDefault()
         setOver(false)
-        onFiles([...e.dataTransfer.files])
+        add([...e.dataTransfer.files])
       }}
-      className={`flex items-end gap-2 border-t px-4 py-3 ${over ? 'border-accent bg-accent-soft' : 'border-line'}`}
+      className={`flex flex-col gap-2 border-t px-4 py-3 ${over ? 'border-accent bg-accent-soft' : 'border-line'}`}
     >
-      <input ref={input} type="file" multiple hidden onChange={(e) => { onFiles([...(e.target.files ?? [])]); e.target.value = '' }} />
-      <button type="button" className="btn-icon" aria-label="Dateien senden" title="Dateien senden" onClick={() => input.current?.click()}>
-        <Paperclip size={18} />
-      </button>
-      <textarea
-        className="input flex-1 resize-none"
-        rows={1}
-        placeholder={over ? 'Loslassen zum Senden' : 'Nachricht schreiben'}
-        aria-label="Nachricht"
-        value={text}
-        maxLength={10_000}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault()
-            submit(e)
-          }
-        }}
-      />
-      <button type="submit" className="btn-primary" disabled={!text.trim()} aria-label="Senden">
-        <Send size={14} />
-      </button>
+      {attachments.length > 0 && (
+        <ul className="flex flex-wrap gap-2" aria-label="Anhänge">
+          {attachments.map((a) => (
+            <li key={a.id} className="relative flex items-center gap-2 rounded-card border border-line bg-bg p-1.5 pr-7 text-xs">
+              {a.preview ? (
+                // eslint-disable-next-line @next/next/no-img-element -- lokale Blob-URL
+                <img src={a.preview} alt="" className="size-12 rounded object-cover" />
+              ) : (
+                <FileIcon size={18} className="text-text-2" />
+              )}
+              <span className="max-w-40">
+                <span className="block truncate font-medium" title={a.file.name}>{a.file.name}</span>
+                <span className="text-text-2">{formatBytes(a.file.size)}</span>
+              </span>
+              <button type="button" className="absolute right-1 top-1 rounded p-0.5 text-text-2 hover:bg-surface hover:text-text"
+                aria-label={`${a.file.name} entfernen`} onClick={() => setAttachments((l) => l.filter((x) => x.id !== a.id))}>
+                <X size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-end gap-2">
+        <input ref={input} type="file" multiple hidden onChange={(e) => { add([...(e.target.files ?? [])]); e.target.value = '' }} />
+        <button type="button" className="btn-icon" aria-label="Dateien anhängen" title="Dateien anhängen" onClick={() => input.current?.click()}>
+          <Paperclip size={18} />
+        </button>
+        <textarea
+          ref={textarea}
+          className="input flex-1 resize-none"
+          rows={1}
+          placeholder={over ? 'Loslassen zum Anhängen' : 'Nachricht schreiben, Bilder mit Ctrl+V einfügen'}
+          aria-label="Nachricht"
+          value={text}
+          maxLength={10_000}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              submit(e)
+            }
+          }}
+        />
+        <button type="submit" className="btn-primary" disabled={!canSend} aria-label="Senden">
+          <Send size={14} />
+        </button>
+      </div>
     </form>
   )
 }
