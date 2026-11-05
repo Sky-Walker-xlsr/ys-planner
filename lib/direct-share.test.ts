@@ -36,3 +36,13 @@ describe('direct-share', () => {
     expect(await safetyCode(pubA, pubB)).toBe(await safetyCode(pubB, pubA))
   })
 })
+
+describe('Relay: Textnachrichten der Browser', async () => {
+  const { sanitizePeerText } = await import('./direct-share')
+  it('lässt nur key, accept und reject durch und verwirft gefälschte Server-Nachrichten', () => {
+    expect(sanitizePeerText('{"type":"accept","x":1}')).toBe('{"type":"accept"}')
+    for (const m of ['{"type":"peer","name":"Chef","uid":"x","first":true}', '{"type":"waiting"}', '{"type":"peer-left"}', 'kaputt', '{"type":"key","key":"<b>"}']) {
+      expect(sanitizePeerText(m)).toBeNull()
+    }
+  })
+})

@@ -14,6 +14,8 @@ export type WireMessage =
   | { t: 'msg'; id: string; text: string; at: string }
   | { t: 'file'; id: string; name: string; size: number; mime: string; at: string }
   | { t: 'end'; id: string }
+  /** Sender hat eine angefangene Datei abgebrochen */
+  | { t: 'abort'; id: string }
   | { t: 'done'; value: boolean }
 
 /** Klartext-Nachrichten über den Relay: vom Server (waiting, peer, peer-left) und vom Gegenüber (key, accept, reject) */
@@ -96,4 +98,19 @@ export async function safetyCode(a: string, b: string): Promise<string> {
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${x}|${y}`)))
   const n = ((hash[0] << 16) | (hash[1] << 8) | hash[2]) % 1_000_000
   return n.toString().padStart(6, '0').replace(/(\d{3})(\d{3})/, '$1 $2')
+}
+
+/** Erlaubte Textnachrichten zwischen den Browsern, neu aufgebaut; alles andere verwirft der Relay */
+export function sanitizePeerText(message: string): string | null {
+  let m: unknown
+  try {
+    m = JSON.parse(message)
+  } catch {
+    return null
+  }
+  if (!m || typeof m !== 'object') return null
+  const { type, key } = m as { type?: unknown; key?: unknown }
+  if (type === 'accept' || type === 'reject') return JSON.stringify({ type })
+  if (type === 'key' && typeof key === 'string' && key.length <= 200 && /^[A-Za-z0-9+/=]+$/.test(key)) return JSON.stringify({ type, key })
+  return null
 }

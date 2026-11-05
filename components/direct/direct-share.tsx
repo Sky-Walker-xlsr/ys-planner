@@ -6,6 +6,7 @@ import { useCurrentUser } from '@/components/app/current-user'
 import { Avatar } from '@/components/ui/avatar'
 import { toast } from '@/components/ui/toast'
 import { formatBytes } from '@/lib/image'
+import { FAIL_LABEL, FileReceiver, isPreviewableImageMime, type FailReason, type ReceiverEvent } from '@/lib/file-receiver'
 import {
   CHUNK_BYTES, decryptFrame, deriveSharedKey, encryptFrame, exportPublicKey, FRAME_CHUNK, FRAME_JSON, generateKeys, MAX_FILE_BYTES,
   MIN_ROOM_LENGTH, newSessionId, normalizeRoom, roomSessionId, safetyCode, SESSION_ID, type RelayMessage, type WireMessage,
@@ -22,9 +23,12 @@ type Phase =
 
 type Peer = { key: string; name: string }
 
+/** Einträge des Gegenübers in eigenem Namensraum: Seine IDs dürfen nie eigene Einträge treffen */
+const peerId = (id: string) => `p:${id}`
+
 type Item =
   | { kind: 'msg'; id: string; mine: boolean; text: string; at: string }
-  | { kind: 'file'; id: string; mine: boolean; name: string; size: number; mime: string; at: string; done: number; url?: string }
+  | { kind: 'file'; id: string; mine: boolean; name: string; size: number; mime: string; at: string; done: number; url?: string; failed?: FailReason }
 
 const hostFlag = (id: string) => `p2p-host:${id}`
 
@@ -159,13 +163,20 @@ function Session({ sessionId, room, me, onLeave }: {
   const ws = useRef<WebSocket | null>(null)
   const keys = useRef<Promise<{ pair: CryptoKeyPair; pub: string }> | null>(null)
   const shared = useRef<CryptoKey | null>(null)
+  // Eingehende Frames warten auf den Schlüssel: Sie können vor der eigenen Ableitung ankommen
+  const sharedReady = useRef<{ promise: Promise<CryptoKey>; resolve: (k: CryptoKey) => void } | null>(null)
+  const gotKey = useRef(false)
   const sentKey = useRef(false)
   const urls = useRef<string[]>([])
-  const incoming = useRef<{ id: string; size: number; mime: string; parts: Uint8Array[]; received: number; lastUi: number } | null>(null)
+  const receiver = useRef(new FileReceiver(MAX_FILE_BYTES))
   // Reihenfolge sichern: Verschlüsseln und Entschlüsseln sind asynchron
   const sendChain = useRef<Promise<void>>(Promise.resolve())
   const recvChain = useRef<Promise<void>>(Promise.resolve())
   const fileQueue = useRef<Promise<void>>(Promise.resolve())
+
+  const patchItem = useCallback((id: string, patch: Partial<Item>) => {
+    setItems((list) => list.map((i) => (i.id === id ? ({ ...i, ...patch } as Item) : i)))
+  }, [])
 
   const end = useCallback(
     (reason: string) => {
@@ -173,6 +184,7 @@ function Session({ sessionId, room, me, onLeave }: {
       const peer = 'peer' in phaseRef.current ? phaseRef.current.peer : undefined
       setPhase({ kind: 'ended', reason, peer })
       shared.current = null
+      for (const e of receiver.current.close()) if (e.type === 'failed') patchItem(peerId(e.id), { failed: e.reason })
       try {
         ws.current?.close(1000)
       } catch {
@@ -185,12 +197,8 @@ function Session({ sessionId, room, me, onLeave }: {
         /* egal */
       }
     },
-    [sessionId, setPhase],
+    [sessionId, setPhase, patchItem],
   )
-
-  const patchItem = useCallback((id: string, patch: Partial<Item>) => {
-    setItems((list) => list.map((i) => (i.id === id ? ({ ...i, ...patch } as Item) : i)))
-  }, [])
 
   const sendPlain = useCallback((m: RelayMessage) => {
     if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify(m))
@@ -225,19 +233,36 @@ function Session({ sessionId, room, me, onLeave }: {
     void keys.current.then(({ pub }) => sendPlain({ type: 'key', key: pub }))
   }, [sendPlain])
 
+  /** Ereignisse des FileReceivers in den Verlauf übernehmen */
+  const applyReceiver = useCallback(
+    (events: ReceiverEvent[]) => {
+      for (const e of events) {
+        if (e.type === 'start') {
+          setBusy((b) => b + 1)
+          setItems((l) => [...l, { kind: 'file', id: peerId(e.id), mine: false, name: e.name, size: e.size, mime: e.mime, at: e.at, done: 0 }])
+        } else if (e.type === 'progress') {
+          patchItem(peerId(e.id), { done: e.received })
+        } else if (e.type === 'complete') {
+          // Blob-Typ kommt aus safeBlobType: Eine empfangene HTML- oder SVG-Datei läuft nie im Ursprung des Planners
+          const url = URL.createObjectURL(new Blob(e.parts as BlobPart[], { type: e.mime }))
+          urls.current.push(url)
+          patchItem(peerId(e.id), { done: e.received, url, mime: e.mime })
+          setBusy((b) => b - 1)
+        } else if (e.type === 'failed') {
+          patchItem(peerId(e.id), { failed: e.reason })
+          setBusy((b) => b - 1)
+        } else if (e.type === 'limit') {
+          end('Das Gegenüber hat mehr Daten geschickt als erlaubt. Session abgebrochen.')
+        }
+      }
+    },
+    [end, patchItem],
+  )
+
   const onFrame = useCallback(
     (kind: number, data: Uint8Array) => {
-      if (kind === FRAME_CHUNK) {
-        const cur = incoming.current
-        if (!cur) return
-        cur.parts.push(data.slice())
-        cur.received += data.byteLength
-        if (Date.now() - cur.lastUi > 150) {
-          cur.lastUi = Date.now()
-          patchItem(cur.id, { done: cur.received })
-        }
-        return
-      }
+      if (kind === FRAME_CHUNK) return applyReceiver(receiver.current.chunk(data))
+      if (kind !== FRAME_JSON) return
       let m: WireMessage
       try {
         m = JSON.parse(new TextDecoder().decode(data)) as WireMessage
@@ -245,28 +270,18 @@ function Session({ sessionId, room, me, onLeave }: {
         return
       }
       if (m.t === 'msg') {
-        setItems((l) => [...l, { kind: 'msg', id: m.id, mine: false, text: String(m.text).slice(0, 10_000), at: m.at }])
+        setItems((l) => [...l, { kind: 'msg', id: `p:msg:${crypto.randomUUID()}`, mine: false, text: String(m.text).slice(0, 10_000), at: String(m.at).slice(0, 40) }])
       } else if (m.t === 'file') {
-        if (m.size > MAX_FILE_BYTES) return
-        incoming.current = { id: m.id, size: m.size, mime: m.mime, parts: [], received: 0, lastUi: 0 }
-        setBusy((b) => b + 1)
-        setItems((l) => [...l, { kind: 'file', id: m.id, mine: false, name: String(m.name).slice(0, 255), size: m.size, mime: m.mime, at: m.at, done: 0 }])
+        applyReceiver(receiver.current.header(m))
       } else if (m.t === 'end') {
-        const cur = incoming.current
-        if (!cur || cur.id !== m.id) return
-        incoming.current = null
-        // Nur Rasterbilder behalten ihren Typ (für die Vorschau). Alles andere als Download-Bytes: Eine
-        // empfangene HTML- oder SVG-Datei darf nie im Ursprung des Planners ausgeführt werden.
-        const type = isImage(cur.mime) ? cur.mime : 'application/octet-stream'
-        const url = URL.createObjectURL(new Blob(cur.parts as BlobPart[], { type }))
-        urls.current.push(url)
-        patchItem(cur.id, { done: cur.received, url })
-        setBusy((b) => b - 1)
+        applyReceiver(receiver.current.end(m.id))
+      } else if (m.t === 'abort') {
+        applyReceiver(receiver.current.abort(m.id))
       } else if (m.t === 'done') {
         setPeerDone(!!m.value)
       }
     },
-    [patchItem],
+    [applyReceiver],
   )
 
   // ---------------------------------------------------------------- Verbindung zum Relay
@@ -274,6 +289,8 @@ function Session({ sessionId, room, me, onLeave }: {
     let closed = false
     let alone: ReturnType<typeof setTimeout> | null = null
     keys.current = generateKeys().then(async (pair) => ({ pair, pub: await exportPublicKey(pair) }))
+    let resolveKey!: (k: CryptoKey) => void
+    sharedReady.current = { promise: new Promise<CryptoKey>((r) => (resolveKey = r)), resolve: resolveKey }
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     const sock = new WebSocket(`${proto}://${location.host}/api/direkt/ws?id=${sessionId}`)
     sock.binaryType = 'arraybuffer'
@@ -287,8 +304,10 @@ function Session({ sessionId, room, me, onLeave }: {
       if (typeof ev.data !== 'string') {
         const frame = ev.data as ArrayBuffer
         recvChain.current = recvChain.current.then(async () => {
-          const key = shared.current
-          if (!key) return
+          const ready = sharedReady.current
+          if (!ready || !gotKey.current) return // Binärframes vor dem Schlüsselaustausch ignorieren
+          const key = await ready.promise
+          if (shared.current !== key) return // Session inzwischen beendet
           try {
             const { kind, data } = await decryptFrame(key, frame)
             onFrame(kind, data)
@@ -330,11 +349,14 @@ function Session({ sessionId, room, me, onLeave }: {
       } else if (m.type === 'reject') {
         end('Die Anfrage wurde abgelehnt.')
       } else if (m.type === 'key') {
-        if (!keys.current || !('peer' in p) || !p.peer) return
+        // Nur ein Schlüssel pro Session: ein späterer Austausch wäre ein Angriff
+        if (gotKey.current || typeof m.key !== 'string' || !keys.current || !('peer' in p) || !p.peer) return
+        gotKey.current = true
         const peer = p.peer
         const theirs = m.key
         void keys.current.then(async ({ pair, pub }) => {
           shared.current = await deriveSharedKey(pair, theirs)
+          sharedReady.current?.resolve(shared.current)
           sendMyKey()
           setCode(await safetyCode(pub, theirs))
           if (phaseRef.current.kind !== 'ended') setPhase({ kind: 'connected', peer })
@@ -350,6 +372,7 @@ function Session({ sessionId, room, me, onLeave }: {
 
     sock.onclose = (ev) => {
       if (closed) return
+      if (ev.code === 4003) return end('Die Anfrage wurde abgelehnt.')
       if (ev.code === 4002) {
         return end(room ? 'In diesem Raum sind schon zwei. Wähle einen anderen Namen.' : 'Die Session ist bereits besetzt. Sie ist nur für zwei Personen.')
       }
@@ -403,6 +426,8 @@ function Session({ sessionId, room, me, onLeave }: {
 
   function reject() {
     sendPlain({ type: 'reject' })
+    // Der Relay schliesst die Verbindung des Gasts, auch wenn dessen Browser das «reject» ignoriert
+    if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify({ type: 'kick' }))
     setPhase({ kind: 'waiting' })
   }
 
@@ -427,7 +452,7 @@ function Session({ sessionId, room, me, onLeave }: {
       }
       const id = crypto.randomUUID()
       const at = new Date().toISOString()
-      const preview = isImage(file.type) ? URL.createObjectURL(file) : undefined
+      const preview = isPreviewableImageMime(file.type) ? URL.createObjectURL(file) : undefined
       if (preview) urls.current.push(preview)
       setItems((l) => [...l, { kind: 'file', id, mine: true, name: file.name, size: file.size, mime: file.type, at, done: 0, url: preview }])
       setBusy((b) => b + 1)
@@ -446,7 +471,13 @@ function Session({ sessionId, room, me, onLeave }: {
           await sendMessage({ t: 'end', id })
           patchItem(id, { done: file.size })
         } catch {
-          toast(`${file.name} konnte nicht gesendet werden`)
+          patchItem(id, { failed: 'aborted' })
+          // Session vorbei: Das Ende wird schon angezeigt, keine Meldung pro Datei
+          if (phaseRef.current.kind !== 'ended') {
+            // Gegenüber Bescheid geben, damit es den angefangenen Empfang verwirft
+            sendMessage({ t: 'abort', id }).catch(() => {})
+            toast(`${file.name} konnte nicht gesendet werden`)
+          }
         } finally {
           setBusy((b) => b - 1)
         }
@@ -595,12 +626,10 @@ function Timeline({ items }: { items: Item[] }) {
   )
 }
 
-const isImage = (mime: string) => /^image\/(png|jpe?g|gif|webp|avif|bmp)$/i.test(mime)
-
 function FileBubble({ item }: { item: Extract<Item, { kind: 'file' }> }) {
   const pct = item.size ? Math.round((item.done / item.size) * 100) : 100
-  const complete = item.mine ? item.done >= item.size : !!item.url
-  const image = isImage(item.mime) && item.url
+  const complete = !item.failed && (item.mine ? item.done >= item.size : !!item.url)
+  const image = isPreviewableImageMime(item.mime) && item.url && !item.failed
   return (
     <div className="flex w-72 max-w-full flex-col overflow-hidden rounded-card border border-line bg-surface">
       {image && (
@@ -613,16 +642,16 @@ function FileBubble({ item }: { item: Extract<Item, { kind: 'file' }> }) {
         <FileIcon size={20} className="shrink-0 text-text-2" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium" title={item.name}>{item.name}</div>
-          <div className="text-xs text-text-2">
-            {formatBytes(item.size)} · {complete ? (item.mine ? 'gesendet' : 'empfangen') : `${pct} %`}
+          <div className={`text-xs ${item.failed ? 'text-danger' : 'text-text-2'}`}>
+            {formatBytes(item.size)} · {item.failed ? FAIL_LABEL[item.failed] : complete ? (item.mine ? 'gesendet' : 'empfangen') : `${Math.min(100, pct)} %`}
           </div>
-          {!complete && (
+          {!complete && !item.failed && (
             <div className="mt-1 h-1 overflow-hidden rounded-full bg-bg">
-              <div className="h-full bg-accent transition-[width]" style={{ width: `${pct}%` }} />
+              <div className="h-full bg-accent transition-[width]" style={{ width: `${Math.min(100, pct)}%` }} />
             </div>
           )}
         </div>
-        {item.url && (!item.mine || complete) && (
+        {item.url && complete && (
           <a href={item.url} download={item.name} className="btn-icon" aria-label={`${item.name} herunterladen`} title="Herunterladen">
             <Download size={16} />
           </a>
@@ -656,7 +685,7 @@ function Composer({ onSend }: { onSend: (text: string, files: File[]) => boolean
   const add = useCallback((files: File[]) => {
     if (!files.length) return
     const next = files.map((file) => {
-      const preview = isImage(file.type) ? URL.createObjectURL(file) : undefined
+      const preview = isPreviewableImageMime(file.type) ? URL.createObjectURL(file) : undefined
       if (preview) previews.current.push(preview)
       return { id: crypto.randomUUID(), file, preview }
     })

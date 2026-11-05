@@ -6,6 +6,12 @@
 // Keepalive: Der Browser schickt «ping», die Runtime antwortet «pong», ohne das Objekt aufzuwecken.
 
 import { DurableObject } from 'cloudflare:workers'
+import { sanitizePeerText } from './direct-share'
+
+/** Grösster Binärframe: 256 KiB Nutzdaten + Typ-Byte + IV + Tag mit Reserve */
+const MAX_BINARY_FRAME = 256 * 1024 + 1024
+const MAX_TEXT_FRAME = 1024
+const CLOSE_KICKED = 4003
 
 export type RelayPeer = { uid: string; name: string; joinedAt: number }
 
@@ -69,10 +75,22 @@ export class DirectRelay extends DurableObject {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+    if (typeof message === 'string' ? message.length > MAX_TEXT_FRAME : message.byteLength > MAX_BINARY_FRAME) {
+      return ws.close(1009, 'Nachricht zu gross')
+    }
+    let outgoing: string | ArrayBuffer = message
+    if (typeof message === 'string') {
+      // «kick» vom zuerst Eingetretenen: abgelehnten Gast hinauswerfen
+      if (message === '{"type":"kick"}') return this.kick(ws as Ws)
+      // Nur erlaubte Nachrichten, neu aufgebaut: Niemand kann Server-Nachrichten (peer, waiting …) fälschen
+      const clean = sanitizePeerText(message)
+      if (!clean) return
+      outgoing = clean
+    }
     for (const o of this.state.getWebSockets()) {
       if (o === ws) continue
       try {
-        o.send(message)
+        o.send(outgoing)
       } catch {
         /* Gegenüber gerade weg */
       }
@@ -85,6 +103,14 @@ export class DirectRelay extends DurableObject {
 
   webSocketError(ws: WebSocket) {
     this.leave(ws)
+  }
+
+  private kick(ws: Ws) {
+    const mine = (ws.deserializeAttachment() as RelayPeer | null)?.joinedAt ?? Infinity
+    for (const o of this.state.getWebSockets()) {
+      if (o === ws) continue
+      if (mine <= ((o.deserializeAttachment() as RelayPeer | null)?.joinedAt ?? 0)) o.close(CLOSE_KICKED, 'Abgelehnt')
+    }
   }
 
   private leave(ws: WebSocket) {
